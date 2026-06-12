@@ -77,7 +77,7 @@ properties:
     description: |
       Base directory for data volumes on the persistent disk.
       Sub-directories data0..dataN-1 are created here by pre-start.
-    default: /var/vcap/store/rustfs
+    default: /var/vcap/store/rustfs-server
 
   rustfs.volumes_per_node:
     description: |
