@@ -83,9 +83,20 @@ properties:
     description: |
       Number of data sub-directories per node (e.g., data0, data1, ...).
       Combined with the peer count from the rustfs-peer link to build
-      RUSTFS_VOLUMES. Minimum 1; recommended 4 for erasure-coded clusters.
-      Use 1 only for single-node, single-volume deployments (no erasure coding).
-    default: 4
+      RUSTFS_VOLUMES. Keep at 1 on BOSH: RustFS requires each local data
+      volume to live on a distinct physical disk, and a BOSH instance has
+      a single persistent disk. Erasure coding spans nodes instead — use
+      4 or more instances. Values above 1 fail RustFS disk validation at
+      startup unless unsafe_bypass_disk_check is enabled.
+    default: 1
+
+  rustfs.unsafe_bypass_disk_check:
+    description: |
+      Set RUSTFS_UNSAFE_BYPASS_DISK_CHECK=true to skip the distinct-
+      physical-disk validation for local erasure endpoints. Only for
+      local testing or CI — never production. Required if
+      volumes_per_node is greater than 1 on a single persistent disk.
+    default: false
 
   rustfs.server_domains:
     description: |

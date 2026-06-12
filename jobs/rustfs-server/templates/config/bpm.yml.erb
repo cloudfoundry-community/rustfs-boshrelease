@@ -60,6 +60,11 @@ processes:
     # Health endpoints
     RUSTFS_HEALTH_ENDPOINT_ENABLE: "<%= p('rustfs.health_enable') %>"
 
+<% if p('rustfs.unsafe_bypass_disk_check') -%>
+    # Skip distinct-physical-disk validation — local testing/CI only
+    RUSTFS_UNSAFE_BYPASS_DISK_CHECK: "true"
+<% end -%>
+
     # Virtual-hosted-style domains
 <% if p('rustfs.server_domains') != '' -%>
     RUSTFS_SERVER_DOMAINS: "<%= p('rustfs.server_domains') %>"

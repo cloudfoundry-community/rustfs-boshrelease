@@ -107,7 +107,7 @@ bosh create-release --force
 bosh upload-release
 ```
 
-### Deploy (3-node cluster)
+### Deploy (4-node cluster)
 
 ```bash
 bosh deploy -d rustfs manifests/rustfs.yml \
@@ -143,8 +143,9 @@ The following table covers the most commonly set properties. See
 | `rustfs.console_port` | `9001` | Web console port |
 | `rustfs.console_enable` | `true` | Enable web console |
 | `rustfs.log_level` | `info` | Log level: trace, debug, info, warn, error |
-| `rustfs.persistent_disk_path` | `/var/vcap/store/rustfs` | Base path for data volumes |
-| `rustfs.volumes_per_node` | `4` | Sub-directories per node for erasure coding |
+| `rustfs.persistent_disk_path` | `/var/vcap/store/rustfs-server` | Base path for data volumes |
+| `rustfs.volumes_per_node` | `1` | Data sub-directories per node — keep at 1 (single persistent disk) |
+| `rustfs.unsafe_bypass_disk_check` | `false` | Skip distinct-physical-disk validation (testing/CI only) |
 | `rustfs.region` | `us-east-1` | S3 region string |
 | `rustfs.server_domains` | `""` | Comma-separated virtual-hosted-style domains |
 | `rustfs.health_enable` | `true` | Enable /health and /health/ready endpoints |
@@ -159,9 +160,12 @@ with one URL per peer per data sub-directory. The manifest sets `update.serial: 
 and `max_in_flight: 1` to ensure nodes start sequentially, which is required for
 initial cluster formation.
 
-Minimum recommended cluster size is 3 nodes with `volumes_per_node: 4` (matching
-the upstream Docker Compose examples). Fewer nodes or volumes may produce unexpected
-erasure-coding behavior.
+Keep `volumes_per_node` at its default of `1`. RustFS validates that local erasure
+endpoints live on distinct physical disks, and a BOSH instance has exactly one
+persistent disk — multiple data sub-directories on the same disk fail at startup
+with `local erasure endpoints must use distinct physical disks`. Erasure coding
+instead spans nodes: use 4 or more instances for an erasure-coded cluster. For
+local testing only, `rustfs.unsafe_bypass_disk_check: true` skips the validation.
 
 **Single-node mode** (`manifests/ops/standalone.yml`) sets `instances: 1` and
 `volumes_per_node: 1`. In this mode there is no erasure coding and no data
@@ -185,9 +189,9 @@ graph TD
     N2 -- BOSH link peer discovery --- N3
     N3 -- BOSH link peer discovery --- N1
 
-    N1 --> D1[(Persistent Disk\n/var/vcap/store/rustfs)]
-    N2 --> D2[(Persistent Disk\n/var/vcap/store/rustfs)]
-    N3 --> D3[(Persistent Disk\n/var/vcap/store/rustfs)]
+    N1 --> D1[(Persistent Disk\n/var/vcap/store/rustfs-server)]
+    N2 --> D2[(Persistent Disk\n/var/vcap/store/rustfs-server)]
+    N3 --> D3[(Persistent Disk\n/var/vcap/store/rustfs-server)]
 
     E[smoke-tests errand] -- consumes rustfs-peers link --> N1
 ```
