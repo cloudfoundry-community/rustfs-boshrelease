@@ -1,0 +1,10 @@
+---
+# Single-node evaluation deployment. No erasure coding, no data
+# redundancy — use external backup.
+- type: replace
+  path: /instance_groups/name=rustfs/instances
+  value: 1
+
+- type: replace
+  path: /instance_groups/name=rustfs/azs
+  value: [z1]
