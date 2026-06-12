@@ -89,11 +89,8 @@ processes:
   limits:
     open_files: <%= p('rustfs.bpm.open_files') %>
 
+  ephemeral_disk: true
   persistent_disk: true
-
-  additional_volumes:
-  - path: /var/vcap/data/rustfs-server
-    writable: true
 
   hooks:
     pre_start: /var/vcap/jobs/rustfs-server/bin/pre-start
