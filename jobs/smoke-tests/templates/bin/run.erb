@@ -18,6 +18,16 @@ PORT=<%= port %>
 REGION="<%= p('rustfs.region') %>"
 TIMEOUT=<%= timeout %>
 
+<% tls = (p('rustfs.tls.certificate', '') != '') -%>
+# Endpoint scheme follows the API TLS configuration. Internal/self-signed CA,
+# so verification is skipped (-k) for these in-cluster probes.
+SCHEME="<%= tls ? 'https' : 'http' %>"
+<% if tls -%>
+CURL_TLS=(-k)
+<% else -%>
+CURL_TLS=()
+<% end -%>
+
 # Peer list from BOSH link (includes primary).
 PEERS=(
 <% peers.each do |inst| -%>
@@ -26,7 +36,7 @@ PEERS=(
 )
 
 PRIMARY="${PEERS[0]}"
-ENDPOINT="http://${PRIMARY}:${PORT}"
+ENDPOINT="${SCHEME}://${PRIMARY}:${PORT}"
 
 # Unique bucket name scoped to this errand run so parallel runs don't clash.
 BUCKET="smoke-$(date +%s)-$$"
@@ -80,6 +90,7 @@ s3_request() {
 
   local curl_args=(
     -fsS
+    "${CURL_TLS[@]}"
     --max-time "${TIMEOUT}"
     -X "${method}"
     -H "${date_hdr}"
@@ -107,7 +118,7 @@ s3_head_status() {
   date_hdr="$(echo "${hdrs}" | head -1)"
   auth_hdr="$(echo "${hdrs}" | tail -1)"
 
-  curl -sS --max-time "${TIMEOUT}" \
+  curl -sS "${CURL_TLS[@]}" --max-time "${TIMEOUT}" \
     -o /dev/null \
     -w '%{http_code}' \
     -X HEAD \
@@ -121,10 +132,10 @@ s3_head_status() {
 # ---------------------------------------------------------------------------
 echo "=== Phase 1: Cluster health probe (${#PEERS[@]} peer(s)) ==="
 for peer in "${PEERS[@]}"; do
-  if curl -fsS --max-time "${TIMEOUT}" "http://${peer}:${PORT}/health" >/dev/null 2>&1; then
+  if curl -fsS "${CURL_TLS[@]}" --max-time "${TIMEOUT}" "${SCHEME}://${peer}:${PORT}/health" >/dev/null 2>&1; then
     ok "health ${peer}:${PORT}"
   else
-    fail "health probe failed — http://${peer}:${PORT}/health did not return 2xx within ${TIMEOUT}s"
+    fail "health probe failed — ${SCHEME}://${peer}:${PORT}/health did not return 2xx within ${TIMEOUT}s"
   fi
 done
 

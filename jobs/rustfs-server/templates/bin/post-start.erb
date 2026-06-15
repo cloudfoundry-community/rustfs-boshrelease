@@ -2,13 +2,22 @@
 set -eu
 
 PORT=<%= p('rustfs.port') %>
+<% tls = (p('rustfs.tls.certificate', '') != '') -%>
+SCHEME=<%= tls ? 'https' : 'http' %>
+<% if tls -%>
+# Self-signed/internal CA — skip verification for the loopback probe.
+CURL_TLS=(-k)
+<% else -%>
+CURL_TLS=()
+<% end -%>
 TIMEOUT=120
 elapsed=0
 
 # Wait for the S3 API liveness endpoint to respond.
 # RustFS exposes GET /health when RUSTFS_HEALTH_ENDPOINT_ENABLE=true (default).
+# The scheme follows the TLS configuration above (https when a cert is set).
 while [ "${elapsed}" -lt "${TIMEOUT}" ]; do
-  if curl -fsS "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1; then
+  if curl -fsS "${CURL_TLS[@]}" "${SCHEME}://127.0.0.1:${PORT}/health" >/dev/null 2>&1; then
     echo "rustfs-server: healthy after ${elapsed}s"
     exit 0
   fi
