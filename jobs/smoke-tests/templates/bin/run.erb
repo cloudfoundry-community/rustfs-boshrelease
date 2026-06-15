@@ -2,7 +2,7 @@
 # RustFS smoke-test errand.
 # Tests: /health probe on every peer + S3 CreateBucket/PutObject/GetObject/
 #        DeleteObject/HeadObject(404)/DeleteBucket cycle against primary peer.
-# Auth:  AWS Signature Version 2 via openssl + curl (no extra packages needed).
+# Auth:  AWS Signature Version 4 via openssl + curl (no extra packages needed).
 # Usage: bosh -d <deployment> run-errand smoke-tests
 set -e -u -o pipefail
 
@@ -36,7 +36,8 @@ PEERS=(
 )
 
 PRIMARY="${PEERS[0]}"
-ENDPOINT="${SCHEME}://${PRIMARY}:${PORT}"
+HOST_HDR="${PRIMARY}:${PORT}"
+ENDPOINT="${SCHEME}://${HOST_HDR}"
 
 # Unique bucket name scoped to this errand run so parallel runs don't clash.
 BUCKET="smoke-$(date +%s)-$$"
@@ -56,51 +57,72 @@ ok() {
   echo "SMOKE OK:   $*"
 }
 
-# sign_v2 <METHOD> <content-type> <canonical-resource>
-# Prints two header lines: "Date: ..." and "Authorization: AWS <key>:<sig>"
-# AWS SigV2 string-to-sign: METHOD\n\nContent-Type\nDate\nCanonicalResource
-sign_v2() {
-  local method="$1"
-  local content_type="$2"
-  local resource="$3"
-  local date_str
-  date_str="$(date -u +"%a, %d %b %Y %H:%M:%S GMT")"
-  # Printf %b interprets \n as newline — required for correct HMAC input.
-  local signature
-  signature="$(printf '%b' "${method}\n\n${content_type}\n${date_str}\n${resource}" \
-    | openssl dgst -sha1 -hmac "${SECRET_KEY}" -binary \
-    | base64)"
-  printf 'Date: %s\nAuthorization: AWS %s:%s\n' \
-    "${date_str}" "${ACCESS_KEY}" "${signature}"
+# sha256_hex <data> — lowercase hex SHA-256 of the argument.
+sha256_hex() {
+  printf '%s' "$1" | openssl dgst -sha256 | awk '{print $NF}'
 }
 
-# s3_request <METHOD> <path> [content-type] [body-data]
-# Returns curl exit code. Caller decides whether to fail.
+# hmac_hex <openssl-macopt-key> <data> — lowercase hex HMAC-SHA256.
+# Uses od (coreutils) for hex so no xxd/vim-common dependency is required.
+hmac_hex() {
+  printf '%b' "$2" \
+    | openssl dgst -sha256 -mac HMAC -macopt "$1" -binary \
+    | od -An -tx1 | tr -d ' \n'
+}
+
+# sigv4 <METHOD> <canonical-path> <payload-hash>
+# Populates the global SIG_HEADERS array with the signed request headers.
+# Signs the minimal header set (host, x-amz-content-sha256, x-amz-date); no
+# Content-Type is sent, so every request type shares one signing path.
+SIG_HEADERS=()
+sigv4() {
+  local method="$1" path="$2" phash="$3"
+  local amzdate datestamp
+  amzdate="$(date -u +%Y%m%dT%H%M%SZ)"
+  datestamp="$(date -u +%Y%m%d)"
+
+  local signed_headers canon_headers canon_req cr_hash scope sts
+  signed_headers="host;x-amz-content-sha256;x-amz-date"
+  canon_headers="host:${HOST_HDR}\nx-amz-content-sha256:${phash}\nx-amz-date:${amzdate}\n"
+  canon_req="${method}\n${path}\n\n${canon_headers}\n${signed_headers}\n${phash}"
+  cr_hash="$(printf '%b' "$canon_req" | openssl dgst -sha256 | awk '{print $NF}')"
+
+  scope="${datestamp}/${REGION}/s3/aws4_request"
+  sts="AWS4-HMAC-SHA256\n${amzdate}\n${scope}\n${cr_hash}"
+
+  local k_date k_region k_svc k_sign sig
+  k_date="$(hmac_hex "key:AWS4${SECRET_KEY}" "${datestamp}")"
+  k_region="$(hmac_hex "hexkey:${k_date}" "${REGION}")"
+  k_svc="$(hmac_hex "hexkey:${k_region}" "s3")"
+  k_sign="$(hmac_hex "hexkey:${k_svc}" "aws4_request")"
+  sig="$(hmac_hex "hexkey:${k_sign}" "${sts}")"
+
+  SIG_HEADERS=(
+    -H "Host: ${HOST_HDR}"
+    -H "x-amz-date: ${amzdate}"
+    -H "x-amz-content-sha256: ${phash}"
+    -H "Authorization: AWS4-HMAC-SHA256 Credential=${ACCESS_KEY}/${scope}, SignedHeaders=${signed_headers}, Signature=${sig}"
+  )
+}
+
+# s3_request <METHOD> <path> [body-data]
+# Signs and issues the request; fails on HTTP error. Echoes the response body.
 s3_request() {
   local method="$1"
   local path="$2"
-  local content_type="${3:-}"
-  local body="${4:-}"
+  local body="${3:-}"
 
-  local hdrs
-  hdrs="$(sign_v2 "${method}" "${content_type}" "${path}")"
-  local date_hdr auth_hdr
-  date_hdr="$(echo "${hdrs}" | head -1)"
-  auth_hdr="$(echo "${hdrs}" | tail -1)"
+  local phash
+  phash="$(sha256_hex "${body}")"
+  sigv4 "${method}" "${path}" "${phash}"
 
   local curl_args=(
     -fsS
     "${CURL_TLS[@]}"
     --max-time "${TIMEOUT}"
     -X "${method}"
-    -H "${date_hdr}"
-    -H "${auth_hdr}"
+    "${SIG_HEADERS[@]}"
   )
-
-  if [[ -n "${content_type}" ]]; then
-    curl_args+=(-H "Content-Type: ${content_type}")
-  fi
-
   if [[ -n "${body}" ]]; then
     curl_args+=(--data-binary "${body}")
   fi
@@ -112,18 +134,15 @@ s3_request() {
 # Returns the HTTP status code for a HEAD request (does not fail on 4xx).
 s3_head_status() {
   local path="$1"
-  local hdrs
-  hdrs="$(sign_v2 HEAD "" "${path}")"
-  local date_hdr auth_hdr
-  date_hdr="$(echo "${hdrs}" | head -1)"
-  auth_hdr="$(echo "${hdrs}" | tail -1)"
+  local phash
+  phash="$(sha256_hex "")"
+  sigv4 HEAD "${path}" "${phash}"
 
   curl -sS "${CURL_TLS[@]}" --max-time "${TIMEOUT}" \
     -o /dev/null \
     -w '%{http_code}' \
     -X HEAD \
-    -H "${date_hdr}" \
-    -H "${auth_hdr}" \
+    "${SIG_HEADERS[@]}" \
     "${ENDPOINT}${path}"
 }
 
@@ -147,17 +166,17 @@ echo ""
 echo "=== Phase 2: S3 round-trip (endpoint=${ENDPOINT}, bucket=${BUCKET}) ==="
 
 # CreateBucket
-s3_request PUT "/${BUCKET}" "" "" \
+s3_request PUT "/${BUCKET}" "" \
   || fail "CreateBucket /${BUCKET} — HTTP error"
 ok "CreateBucket ${BUCKET}"
 
 # PutObject
-s3_request PUT "/${BUCKET}/${KEY}" "text/plain" "${PAYLOAD}" \
+s3_request PUT "/${BUCKET}/${KEY}" "${PAYLOAD}" \
   || fail "PutObject /${BUCKET}/${KEY} — HTTP error"
 ok "PutObject ${KEY}"
 
 # GetObject and verify content
-got="$(s3_request GET "/${BUCKET}/${KEY}" "" "" \
+got="$(s3_request GET "/${BUCKET}/${KEY}" "" \
   || fail "GetObject /${BUCKET}/${KEY} — HTTP error")"
 
 if [[ "${got}" != "${PAYLOAD}" ]]; then
@@ -166,7 +185,7 @@ fi
 ok "GetObject content verified"
 
 # DeleteObject
-s3_request DELETE "/${BUCKET}/${KEY}" "" "" \
+s3_request DELETE "/${BUCKET}/${KEY}" "" \
   || fail "DeleteObject /${BUCKET}/${KEY} — HTTP error"
 ok "DeleteObject ${KEY}"
 
@@ -178,7 +197,7 @@ fi
 ok "HeadObject returned 404 — deletion confirmed"
 
 # DeleteBucket (best-effort cleanup; do not fail errand if this errors)
-s3_request DELETE "/${BUCKET}" "" "" >/dev/null 2>&1 || true
+s3_request DELETE "/${BUCKET}" "" >/dev/null 2>&1 || true
 ok "DeleteBucket ${BUCKET} (cleanup)"
 
 echo ""

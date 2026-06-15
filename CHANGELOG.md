@@ -2,6 +2,21 @@
 
 All notable changes to rustfs-boshrelease are documented here.
 
+## Unreleased
+
+### Changed
+
+- `jobs/smoke-tests` — sign S3 requests with AWS Signature Version 4 instead
+  of the deprecated SigV2, which RustFS rejects with `403`. The HMAC chain is
+  derived with `openssl` and hex-encoded with `od`, so no `xxd`/vim-common
+  dependency is added.
+
+### Added
+
+- `jobs/smoke-tests` — `rustfs.tls.certificate` property so the errand probes
+  the cluster over `https` when the API is TLS-enabled (mirrors the
+  `rustfs-server` job; verification is skipped with `-k`).
+
 ## 0.0.1 (2026-05-20)
 
 Initial pre-release scaffold of the BOSH release. Packages upstream RustFS

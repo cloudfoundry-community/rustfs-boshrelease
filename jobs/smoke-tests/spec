@@ -44,6 +44,15 @@ properties:
       Must match the rustfs-server job's rustfs.region.
     default: us-east-1
 
+  rustfs.tls.certificate:
+    description: |
+      API TLS certificate of the rustfs-server job. Used only as a signal:
+      when non-empty the errand probes endpoints over https (verification is
+      skipped with -k, so no key or CA is required here). Leave unset for a
+      plaintext http cluster. Must mirror the rustfs-server job's
+      rustfs.tls.certificate.
+    default: ""
+
   smoke_tests.timeout_secs:
     description: curl --max-time value in seconds for each request.
     default: 30
