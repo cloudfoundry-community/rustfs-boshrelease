@@ -14,8 +14,8 @@ templates:
   bin/post-deploy.erb:     bin/post-deploy
   config/bpm.yml.erb:      config/bpm.yml
   config/env.sh.erb:       config/env.sh
-  tls/api/cert.pem.erb:    tls/api/cert.pem
-  tls/api/key.pem.erb:     tls/api/key.pem
+  tls/api/rustfs_cert.pem.erb: tls/api/rustfs_cert.pem
+  tls/api/rustfs_key.pem.erb:  tls/api/rustfs_key.pem
   tls/peer/ca.pem.erb:     tls/peer/ca.pem
   tls/peer/cert.pem.erb:   tls/peer/cert.pem
   tls/peer/key.pem.erb:    tls/peer/key.pem
@@ -130,14 +130,16 @@ properties:
 
   rustfs.tls.certificate:
     description: |
-      PEM-encoded TLS certificate for the S3 API endpoint
-      (written to tls/api/cert.pem, referenced via RUSTFS_TLS_PATH).
+      PEM-encoded TLS certificate for the S3 API endpoint. Written to
+      tls/api/rustfs_cert.pem — the filename RustFS discovers under
+      RUSTFS_TLS_PATH.
       Optional — omit for plaintext HTTP.
 
   rustfs.tls.key:
     description: |
-      PEM-encoded TLS private key for the S3 API endpoint
-      (written to tls/api/key.pem, referenced via RUSTFS_TLS_PATH).
+      PEM-encoded TLS private key for the S3 API endpoint. Written to
+      tls/api/rustfs_key.pem — the filename RustFS discovers under
+      RUSTFS_TLS_PATH.
       Optional — omit for plaintext HTTP.
 
   rustfs.peer.tls.ca:
