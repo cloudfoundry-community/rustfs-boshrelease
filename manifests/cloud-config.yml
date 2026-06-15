@@ -1,0 +1,147 @@
+---
+# Sample BOSH cloud-config for rustfs deployments.
+#
+# cloud_properties shown are IaaS-agnostic stubs. Replace the
+# cloud_properties blocks for your IaaS before running
+# `bosh update-cloud-config`.
+#
+# Per-IaaS guidance is included as inline comments.
+
+azs:
+# bosh-lite only has z1; for production use z1+z2+z3 across hosts/racks.
+- name: z1
+  cloud_properties: {}
+  # aws:       cloud_properties: { availability_zone: us-east-1a }
+  # vsphere:   cloud_properties: { datacenters: [{name: dc0, clusters: [{cluster0: {}}]}] }
+  # openstack: cloud_properties: { availability_zone: nova }
+  # pve:       cloud_properties: { datacenter: pve0, node: pve-node-1 }
+
+- name: z2
+  cloud_properties: {}
+  # aws:       cloud_properties: { availability_zone: us-east-1b }
+  # vsphere:   (same datacenter, different cluster or resource pool)
+  # openstack: cloud_properties: { availability_zone: zone-b }
+  # pve:       cloud_properties: { datacenter: pve0, node: pve-node-2 }
+
+- name: z3
+  cloud_properties: {}
+  # aws:       cloud_properties: { availability_zone: us-east-1c }
+  # vsphere:   (same datacenter, different cluster or resource pool)
+  # openstack: cloud_properties: { availability_zone: zone-c }
+  # pve:       cloud_properties: { datacenter: pve0, node: pve-node-3 }
+
+networks:
+# rustfs: production network used by the main manifest.
+- name: rustfs
+  type: manual
+  subnets:
+  - range: 10.0.10.0/24          # adjust to your environment
+    gateway: 10.0.10.1
+    az: z1
+    # Illustrative static range — not consumed by the sample manifest (which uses dynamic allocation).
+    # Reserve static IPs here if your deployment requires fixed addresses.
+    static: [10.0.10.10-10.0.10.13]
+    reserved: [10.0.10.1-10.0.10.9]
+    cloud_properties: {}
+    # aws:       cloud_properties: { subnet: subnet-xxxxxxxx }
+    # vsphere:   cloud_properties: { name: rustfs-pg }
+    # openstack: cloud_properties: { net_id: <neutron-network-uuid> }
+    # pve:       cloud_properties: { network_name: vmbr0 }
+  - range: 10.0.11.0/24
+    gateway: 10.0.11.1
+    az: z2
+    static: [10.0.11.10-10.0.11.13]  # illustrative; not used by sample manifest
+    reserved: [10.0.11.1-10.0.11.9]
+    cloud_properties: {}
+  - range: 10.0.12.0/24
+    gateway: 10.0.12.1
+    az: z3
+    static: [10.0.12.10-10.0.12.13]  # illustrative; not used by sample manifest
+    reserved: [10.0.12.1-10.0.12.9]
+    cloud_properties: {}
+
+# default: used by bosh-lite (via manifests/ops/standalone.yml).
+- name: default
+  type: manual
+  subnets:
+  - range: 10.244.0.0/24
+    gateway: 10.244.0.1
+    az: z1
+    static: [10.244.0.10-10.244.0.30]
+    reserved: [10.244.0.1-10.244.0.9]
+    cloud_properties: {}
+    # bosh-lite uses 10.244.x.x with no cloud_properties required.
+
+vm_types:
+- name: rustfs
+  cloud_properties: {}
+  # Ephemeral disk hosts /var/vcap/data: logs, tmp files, and compiled
+  # packages. Object data lives on the separate persistent disk (see
+  # disk_types below). Size the ephemeral disk for log retention and
+  # package cache — 20 GB is a safe minimum.
+  #
+  # aws:
+  #   cloud_properties:
+  #     instance_type: m5.xlarge
+  #     ephemeral_disk:
+  #       size: 20480      # MB
+  #       type: gp3
+  #
+  # vsphere:
+  #   cloud_properties:
+  #     cpu: 4
+  #     ram: 8192
+  #     disk: 20480        # MB — ephemeral disk
+  #     datacenters:
+  #     - name: dc0
+  #       clusters:
+  #       - cluster0: {}
+  #
+  # openstack:
+  #   cloud_properties:
+  #     instance_type: m1.xlarge
+  #     root_disk:
+  #       size: 20          # GB
+  #
+  # pve:
+  #   cloud_properties:
+  #     cpu: 4
+  #     memory: 8192       # MB
+  #     disk: 20480        # MB — ephemeral disk on primary volume
+
+compilation:
+  workers: 4
+  reuse_compilation_vms: true
+  az: z1
+  network: default
+  cloud_properties: {}
+  # aws:       cloud_properties: { instance_type: m5.large }
+  # vsphere:   cloud_properties: { cpu: 2, ram: 4096, disk: 10240, datacenters: [{name: dc0, clusters: [{cluster0: {}}]}] }
+  # openstack: cloud_properties: { instance_type: m1.large }
+  # pve:       cloud_properties: { cpu: 2, memory: 4096, disk: 10240 }
+
+disk_types:
+- name: rustfs
+  disk_size: 51200   # 50 GB — resize for your expected object storage volume
+  cloud_properties: {}
+  # This disk is mounted at /var/vcap/store and holds all object data.
+  # XFS formatting is requested by the manifest via
+  # instance_groups[rustfs].env.persistent_disk_fs: xfs — it is NOT set here.
+  #
+  # aws:
+  #   cloud_properties:
+  #     type: gp3
+  #     iops: 3000
+  #     encrypted: true
+  #
+  # vsphere:
+  #   cloud_properties:
+  #     type: thin      # or eager_zeroed_thick for better performance
+  #
+  # openstack:
+  #   cloud_properties:
+  #     type: ceph-ssd  # volume type name from `openstack volume type list`
+  #
+  # pve:
+  #   cloud_properties:
+  #     type: raw       # or qcow2; raw recommended for performance

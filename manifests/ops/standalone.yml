@@ -8,3 +8,13 @@
 - type: replace
   path: /instance_groups/name=rustfs/azs
   value: [z1]
+
+- type: replace
+  path: /instance_groups/name=rustfs/networks
+  value:
+  - name: default
+
+- type: replace
+  path: /instance_groups/name=smoke-tests/networks
+  value:
+  - name: default

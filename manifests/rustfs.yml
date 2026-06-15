@@ -23,11 +23,13 @@ instance_groups:
 - name: rustfs
   instances: 4
   azs: [z1, z2, z3]
-  vm_type: default
+  vm_type: rustfs
   stemcell: default
-  persistent_disk_type: 50GB
+  persistent_disk_type: rustfs
+  env:
+    persistent_disk_fs: xfs
   networks:
-  - name: default
+  - name: rustfs
   jobs:
   - name: bpm
     release: bpm
@@ -42,10 +44,10 @@ instance_groups:
   lifecycle: errand
   instances: 1
   azs: [z1]
-  vm_type: default
+  vm_type: rustfs
   stemcell: default
   networks:
-  - name: default
+  - name: rustfs
   jobs:
   - name: smoke-tests
     release: rustfs
