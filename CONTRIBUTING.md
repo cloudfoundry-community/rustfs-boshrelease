@@ -26,12 +26,12 @@ with the BOSH CLI:
 
 ```bash
 # Download the upstream binary
-curl -Lo /tmp/rustfs-linux-x86_64-musl-1.0.0-beta.3.zip \
-  https://github.com/rustfs/rustfs/releases/download/1.0.0-beta.3/rustfs-linux-x86_64-musl-v1.0.0-beta.3.zip
+curl -Lo /tmp/rustfs-linux-x86_64-musl-1.0.0-beta.9.zip \
+  https://github.com/rustfs/rustfs/releases/download/1.0.0-beta.9/rustfs-linux-x86_64-musl-v1.0.0-beta.9.zip
 
 # Register with BOSH (updates config/blobs.yml)
-bosh add-blob /tmp/rustfs-linux-x86_64-musl-1.0.0-beta.3.zip \
-  rustfs/rustfs-linux-x86_64-musl-1.0.0-beta.3.zip
+bosh add-blob /tmp/rustfs-linux-x86_64-musl-1.0.0-beta.9.zip \
+  rustfs/rustfs-linux-x86_64-musl-1.0.0-beta.9.zip
 ```
 
 To upload blobs to the S3 blobstore (requires `config/private.yml`):

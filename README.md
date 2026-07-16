@@ -2,7 +2,7 @@
 
 > ⚠ **PRE-RELEASE WARNING** ⚠
 >
-> RustFS upstream is currently pre-release (1.0.0-beta.3 as of 2026-05).
+> RustFS upstream is currently pre-release (1.0.0-beta.9 as of 2026-07).
 > The distributed/cluster mode is marked "Under Testing" upstream.
 > Use this BOSH release for evaluation and non-production workloads only.
 > Pin to a specific upstream binary version; do not assume API stability.
@@ -11,7 +11,7 @@
 
 > **WARNING: RustFS Distributed Mode — Under Testing**
 >
-> RustFS 1.0.0-beta.3 explicitly marks "Distributed Mode: Under Testing" in its feature
+> RustFS 1.0.0-beta.9 explicitly marks "Distributed Mode: Under Testing" in its feature
 > matrix. This BOSH release enables cluster mode when instances > 1, but cluster
 > stability, data durability, and node rejoin behavior have NOT been validated by the
 > FiveTwenty team or the RustFS project for production use.
@@ -41,7 +41,7 @@ storage server written in Rust.
 
 ## Overview
 
-This release deploys RustFS 1.0.0-beta.3 with BOSH-link-driven peer discovery for
+This release deploys RustFS 1.0.0-beta.9 with BOSH-link-driven peer discovery for
 cluster mode. It packages the pre-built musl-linked Linux binary from the official
 RustFS GitHub releases. Deployments scale from a single evaluation node (using
 `manifests/ops/standalone.yml`) up to a multi-node distributed cluster. BPM manages
@@ -93,11 +93,11 @@ this release with environment-aware defaults, credential generation, and
 Before creating a dev release, download and register the RustFS binary blob:
 
 ```bash
-curl -Lo /tmp/rustfs-linux-x86_64-musl-1.0.0-beta.3.zip \
-  https://github.com/rustfs/rustfs/releases/download/1.0.0-beta.3/rustfs-linux-x86_64-musl-v1.0.0-beta.3.zip
+curl -Lo /tmp/rustfs-linux-x86_64-musl-1.0.0-beta.9.zip \
+  https://github.com/rustfs/rustfs/releases/download/1.0.0-beta.9/rustfs-linux-x86_64-musl-v1.0.0-beta.9.zip
 
-bosh add-blob /tmp/rustfs-linux-x86_64-musl-1.0.0-beta.3.zip \
-  rustfs/rustfs-linux-x86_64-musl-1.0.0-beta.3.zip
+bosh add-blob /tmp/rustfs-linux-x86_64-musl-1.0.0-beta.9.zip \
+  rustfs/rustfs-linux-x86_64-musl-1.0.0-beta.9.zip
 ```
 
 ### Create a dev release
@@ -200,7 +200,7 @@ graph TD
 
 | Package | Contents |
 |---------|---------|
-| `rustfs` | Pre-built RustFS binary (linux-x86_64-musl, 1.0.0-beta.3) |
+| `rustfs` | Pre-built RustFS binary (linux-x86_64-musl, 1.0.0-beta.9) |
 
 ## Smoke Tests
 

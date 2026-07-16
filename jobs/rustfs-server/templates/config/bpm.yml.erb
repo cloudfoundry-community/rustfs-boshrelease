@@ -12,7 +12,7 @@
   if peer_instances.length > 1
     # Distributed mode.
     # NOTE: RustFS distributed mode is marked "Under Testing" upstream as of
-    # 1.0.0-beta.3. Do NOT use in production without upstream GA validation.
+    # 1.0.0-beta.9. Do NOT use in production without upstream GA validation.
     volumes_value = peer_instances.map do |inst|
       if vols_per_node == 1
         "http://#{inst.address}:#{port}#{store_path}/data0"
@@ -33,7 +33,7 @@
 -%>
 ---
 # WARNING: RustFS distributed mode (cluster_mode: <%= cluster_mode %>) is marked
-# "Under Testing" upstream as of 1.0.0-beta.3. Not recommended for production.
+# "Under Testing" upstream as of 1.0.0-beta.9. Not recommended for production.
 processes:
 - name: rustfs-server
   executable: /var/vcap/packages/rustfs/bin/rustfs

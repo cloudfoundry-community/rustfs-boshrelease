@@ -5,7 +5,7 @@
 # Must be run from the release root directory.
 #
 # Arguments:
-#   VERSION   RustFS release tag, e.g. 1.0.0-beta.3 (default: 1.0.0-beta.3)
+#   VERSION   RustFS release tag, e.g. 1.0.0-beta.9 (default: 1.0.0-beta.9)
 #   VARIANT   musl or gnu (default: musl; musl is statically linked, preferred)
 #
 # Prerequisites:
@@ -16,7 +16,7 @@
 #   bosh upload-blobs
 set -e -u -o pipefail
 
-VERSION="${1:-1.0.0-beta.3}"
+VERSION="${1:-1.0.0-beta.9}"
 VARIANT="${2:-musl}"
 
 # Validate VARIANT

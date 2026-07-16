@@ -3,7 +3,7 @@
 This document covers how to cut a new final release of rustfs-boshrelease.
 
 > **WARNING: RustFS Distributed Mode — Under Testing**
-> RustFS 1.0.0-beta.3 marks "Distributed Mode: Under Testing" in its feature matrix.
+> RustFS 1.0.0-beta.9 marks "Distributed Mode: Under Testing" in its feature matrix.
 > The BOSH release enables cluster mode when instances > 1, but cluster stability,
 > data durability, and node rejoin behavior have not been validated for production use.
 > Use single-node mode (standalone.yml ops file) until RustFS reaches GA.
@@ -33,12 +33,12 @@ blobstore:
 Run the helper script from the release root:
 
 ```bash
-scripts/add-blob.sh 1.0.0-beta.3 musl
+scripts/add-blob.sh 1.0.0-beta.9 musl
 ```
 
 Arguments:
 
-- First argument: RustFS version tag (e.g. `1.0.0-beta.3`)
+- First argument: RustFS version tag (e.g. `1.0.0-beta.9`)
 - Second argument: variant — `musl` (default, statically linked) or `gnu`
 
 The script downloads the binary from the RustFS GitHub releases, verifies its SHA256
