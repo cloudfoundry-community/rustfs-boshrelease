@@ -74,7 +74,7 @@ CURL_TLS=(-k)
 CURL_TLS=()
 <% end -%>
 
-log() { echo "rustfs-server post-start: $*"; }
+log() { echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) rustfs-server post-start: $*"; }
 
 # probe HOST PATH: prints nothing and returns curl's exit status.
 probe() {
