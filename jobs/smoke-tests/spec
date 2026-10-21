@@ -3,12 +3,14 @@ name: smoke-tests
 
 description: |
   Errand verifying RustFS cluster is healthy and S3 API functions end-to-end.
-  Probes /health on every peer discovered via the rustfs-peer BOSH link, then
+  Probes /health/ready on every peer discovered via the rustfs-peer BOSH link, then
   performs a full S3 cycle — CreateBucket, PutObject, GetObject (content verify),
   DeleteObject, HeadObject (expect 404), DeleteBucket — against the first peer.
 
   Authentication uses AWS Signature Version 4, computed with openssl and od
-  and sent with curl.  Every x-amz-* header the errand sends is signed,
+  and sent with curl.  The HMAC is built in bash and fed to openssl on
+  stdin, so neither the secret key nor any derived signing key appears on a
+  command line.  Every x-amz-* header the errand sends is signed,
   because RustFS 1.0 rejects unsigned ones.  No packages are needed beyond the base
   tools that the ubuntu-noble and ubuntu-resolute stemcells ship (bash, curl,
   openssl, od, and date).
@@ -17,6 +19,7 @@ packages: []
 
 templates:
   bin/run.erb: bin/run
+  tls/ca.crt.erb: tls/ca.crt
 
 consumes:
   - name: rustfs-peer
@@ -45,11 +48,19 @@ properties:
 
   rustfs.tls.certificate:
     description: |
-      API TLS certificate of the rustfs-server job. Used only as a signal:
-      when non-empty the errand probes endpoints over https (verification is
-      skipped with -k, so no key or CA is required here). Leave unset for a
-      plaintext http cluster. Must mirror the rustfs-server job's
-      rustfs.tls.certificate.
+      API TLS certificate of the rustfs-server job.  The errand uses it only
+      to decide the scheme, so when it is set, every request goes over
+      https.  Leave it unset for a plaintext http cluster.  It must mirror
+      the rustfs-server job's rustfs.tls.certificate.
+    default: ""
+
+  rustfs.tls.ca:
+    description: |
+      CA certificate that signed the rustfs-server API certificates.  When
+      it is set, the errand verifies every node against it, by the node's
+      link address.  When TLS is on and this is unset, the errand skips
+      verification with -k and prints a warning, which only makes sense
+      for a single node with a certificate from no shared CA.
     default: ""
 
   smoke_tests.timeout_secs:

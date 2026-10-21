@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # RustFS smoke-test errand.
-# Tests: /health probe on every peer + S3 CreateBucket/PutObject/GetObject/
+# Tests: /health/ready probe on every peer + S3 CreateBucket/PutObject/GetObject/
 #        DeleteObject/HeadObject(404)/DeleteBucket cycle against primary peer.
 # Auth:  AWS Signature Version 4 via openssl + curl (no extra packages needed).
 # Usage: bosh -d <deployment> run-errand smoke-tests
@@ -10,6 +10,12 @@ set -e -u -o pipefail
   peers   = link('rustfs-peer').instances
   port    = p('rustfs.port')
   timeout = p('smoke_tests.timeout_secs')
+
+  # Bracket IPv6 literals so that they can sit inside a URL and a Host header.
+  url_host = lambda { |a| a.to_s.include?(':') && !a.to_s.start_with?('[') ? "[#{a}]" : a.to_s }
+
+  tls    = p('rustfs.tls.certificate', '').to_s.strip != ''
+  ca_set = p('rustfs.tls.ca', '').to_s.include?('BEGIN CERTIFICATE')
 -%>
 
 ACCESS_KEY="<%= p('rustfs.access_key') %>"
@@ -18,11 +24,13 @@ PORT=<%= port %>
 REGION="<%= p('rustfs.region') %>"
 TIMEOUT=<%= timeout %>
 
-<% tls = (p('rustfs.tls.certificate', '') != '') -%>
-# Endpoint scheme follows the API TLS configuration. Internal/self-signed CA,
-# so verification is skipped (-k) for these in-cluster probes.
+# The scheme follows the API TLS configuration.  With a CA, every node is
+# verified against it by its link address, which the API certificate names.
 SCHEME="<%= tls ? 'https' : 'http' %>"
-<% if tls -%>
+<% if tls && ca_set -%>
+CURL_TLS=(--cacert /var/vcap/jobs/smoke-tests/tls/ca.crt)
+<% elsif tls -%>
+echo "SMOKE WARN: rustfs.tls.ca is unset, so certificates are not verified" >&2
 CURL_TLS=(-k)
 <% else -%>
 CURL_TLS=()
@@ -31,7 +39,7 @@ CURL_TLS=()
 # Peer list from BOSH link (includes primary).
 PEERS=(
 <% peers.each do |inst| -%>
-  "<%= inst.address %>"
+  "<%= url_host.call(inst.address) %>"
 <% end -%>
 )
 
@@ -62,12 +70,41 @@ sha256_hex() {
   printf '%s' "$1" | openssl dgst -sha256 | awk '{print $NF}'
 }
 
-# hmac_hex <openssl-macopt-key> <data> — lowercase hex HMAC-SHA256.
-# Uses od (coreutils) for hex so no xxd/vim-common dependency is required.
+# to_hex: lowercase hex of stdin.  -v keeps od from folding repeated lines
+# into a '*', which would corrupt any value with a repeated 16-byte run.
+to_hex() {
+  od -An -v -tx1 | tr -d ' \n'
+}
+
+# hex_to_esc <hex>: the same bytes as printf %b escapes.
+hex_to_esc() {
+  local hex="$1" out="" i
+  for ((i = 0; i < ${#hex}; i += 2)); do
+    out+="\\x${hex:i:2}"
+  done
+  printf '%s' "${out}"
+}
+
+# hmac_hex <key-hex> <data>: lowercase hex HMAC-SHA256, per RFC 2104.
+# The key never reaches a command line.  printf is a shell builtin, and
+# openssl only hashes what arrives on stdin, so neither the secret key nor
+# a derived signing key shows up in ps output.
 hmac_hex() {
-  printf '%b' "$2" \
-    | openssl dgst -sha256 -mac HMAC -macopt "$1" -binary \
-    | od -An -tx1 | tr -d ' \n'
+  local key_hex="$1" data="$2" ipad="" opad="" i b
+  if (( ${#key_hex} > 128 )); then
+    key_hex="$(printf '%b' "$(hex_to_esc "${key_hex}")" | openssl dgst -sha256 -binary | to_hex)"
+  fi
+  while (( ${#key_hex} < 128 )); do
+    key_hex+="00"
+  done
+  for ((i = 0; i < 128; i += 2)); do
+    b=$((16#${key_hex:i:2}))
+    printf -v ipad '%s\\x%02x' "${ipad}" $((b ^ 0x36))
+    printf -v opad '%s\\x%02x' "${opad}" $((b ^ 0x5c))
+  done
+  local inner
+  inner="$({ printf '%b' "${ipad}"; printf '%b' "${data}"; } | openssl dgst -sha256 -binary | to_hex)"
+  { printf '%b' "${opad}"; printf '%b' "$(hex_to_esc "${inner}")"; } | openssl dgst -sha256 -binary | to_hex
 }
 
 # sigv4 <METHOD> <canonical-path> <payload-hash>
@@ -91,11 +128,13 @@ sigv4() {
   sts="AWS4-HMAC-SHA256\n${amzdate}\n${scope}\n${cr_hash}"
 
   local k_date k_region k_svc k_sign sig
-  k_date="$(hmac_hex "key:AWS4${SECRET_KEY}" "${datestamp}")"
-  k_region="$(hmac_hex "hexkey:${k_date}" "${REGION}")"
-  k_svc="$(hmac_hex "hexkey:${k_region}" "s3")"
-  k_sign="$(hmac_hex "hexkey:${k_svc}" "aws4_request")"
-  sig="$(hmac_hex "hexkey:${k_sign}" "${sts}")"
+  local k_secret
+  k_secret="$(printf '%s' "AWS4${SECRET_KEY}" | to_hex)"
+  k_date="$(hmac_hex "${k_secret}" "${datestamp}")"
+  k_region="$(hmac_hex "${k_date}" "${REGION}")"
+  k_svc="$(hmac_hex "${k_region}" "s3")"
+  k_sign="$(hmac_hex "${k_svc}" "aws4_request")"
+  sig="$(hmac_hex "${k_sign}" "${sts}")"
 
   SIG_HEADERS=(
     -H "Host: ${HOST_HDR}"
@@ -117,8 +156,8 @@ s3_request() {
   sigv4 "${method}" "${path}" "${phash}"
 
   local curl_args=(
-    -fsS
-    "${CURL_TLS[@]}"
+    -fsS -g
+    ${CURL_TLS[@]+"${CURL_TLS[@]}"}
     --max-time "${TIMEOUT}"
     -X "${method}"
     "${SIG_HEADERS[@]}"
@@ -141,7 +180,7 @@ s3_head_status() {
   phash="$(sha256_hex "")"
   sigv4 HEAD "${path}" "${phash}"
 
-  curl -sS "${CURL_TLS[@]}" --max-time "${TIMEOUT}" \
+  curl -sS -g ${CURL_TLS[@]+"${CURL_TLS[@]}"} --max-time "${TIMEOUT}" \
     -o /dev/null \
     -w '%{http_code}' \
     --head \
@@ -150,15 +189,20 @@ s3_head_status() {
 }
 
 # ---------------------------------------------------------------------------
-# Phase 1: /health probe on every peer
+# Phase 1: /health/ready probe on every peer
 # ---------------------------------------------------------------------------
-echo "=== Phase 1: Cluster health probe (${#PEERS[@]} peer(s)) ==="
+# /health only says a process is up.  /health/ready says the node is part of
+# a formed erasure set and can serve data, which is what a smoke test needs.
+echo "=== Phase 1: Cluster readiness probe (${#PEERS[@]} peer(s)) ==="
 for peer in "${PEERS[@]}"; do
-  if curl -fsS "${CURL_TLS[@]}" --max-time "${TIMEOUT}" "${SCHEME}://${peer}:${PORT}/health" >/dev/null 2>&1; then
-    ok "health ${peer}:${PORT}"
-  else
-    fail "health probe failed — ${SCHEME}://${peer}:${PORT}/health did not return 2xx within ${TIMEOUT}s"
-  fi
+  rc=0
+  curl -fsS -g ${CURL_TLS[@]+"${CURL_TLS[@]}"} --max-time "${TIMEOUT}" -o /dev/null \
+    "${SCHEME}://${peer}:${PORT}/health/ready" 2>/dev/null || rc=$?
+  case "${rc}" in
+    0)        ok "ready ${peer}:${PORT}" ;;
+    51|60|77) fail "the certificate at ${peer}:${PORT} did not verify against the CA (curl exit ${rc})" ;;
+    *)        fail "readiness probe failed: ${SCHEME}://${peer}:${PORT}/health/ready did not return 2xx within ${TIMEOUT}s (curl exit ${rc})" ;;
+  esac
 done
 
 echo ""
