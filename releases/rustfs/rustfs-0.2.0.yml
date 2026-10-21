@@ -1,0 +1,27 @@
+name: rustfs
+version: 0.2.0
+commit_hash: bd1d8d8
+uncommitted_changes: false
+jobs:
+- name: rustfs-server
+  version: a55cb677316942ada5fce63147d4f75d46f85d86e97a37eff3faee129a33352b
+  fingerprint: a55cb677316942ada5fce63147d4f75d46f85d86e97a37eff3faee129a33352b
+  sha1: sha256:0dcd89595d534b8c704688e421662ecba19ffc7219ee90e243897fe248eed8c3
+  packages:
+  - rustfs
+- name: smoke-tests
+  version: 6e1f4f60822200f7d6f4aaf48f6fb75ee19079cd1f513fea9ee2fdeae5f7b3da
+  fingerprint: 6e1f4f60822200f7d6f4aaf48f6fb75ee19079cd1f513fea9ee2fdeae5f7b3da
+  sha1: sha256:8a82555af679fb59767d3cd69f6f5854d9738b05e96f7e86f6361effc82cdb53
+  packages: []
+packages:
+- name: rustfs
+  version: 068d1dc4eb9b759fca98711828c60d22500003dca2ee3ac04a48222dc3c5c535
+  fingerprint: 068d1dc4eb9b759fca98711828c60d22500003dca2ee3ac04a48222dc3c5c535
+  sha1: sha256:dd50b09a03858e25608c409541f085a5487cce4b7e47677f6ac19057eb4c5d10
+  dependencies: []
+license:
+  version: bf5cbc0e10500943ba211c0b2733ceecc1e2350e277b153b2239ef5de1a13229
+  fingerprint: bf5cbc0e10500943ba211c0b2733ceecc1e2350e277b153b2239ef5de1a13229
+  sha1: sha256:82a5f1560c9a28c656269f29e261ea503cff245e0a7460bcaf337fa3eaea2a37
+no_compression: false
