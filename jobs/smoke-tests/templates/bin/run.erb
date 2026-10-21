@@ -132,6 +132,9 @@ s3_request() {
 
 # s3_head_status <path>
 # Returns the HTTP status code for a HEAD request (does not fail on 4xx).
+# --head makes curl skip the response body.  With -X HEAD over plaintext
+# HTTP/1.1, curl waits for the body that the 404 advertises in
+# Content-Length and fails with a timeout.
 s3_head_status() {
   local path="$1"
   local phash
@@ -141,7 +144,7 @@ s3_head_status() {
   curl -sS "${CURL_TLS[@]}" --max-time "${TIMEOUT}" \
     -o /dev/null \
     -w '%{http_code}' \
-    -X HEAD \
+    --head \
     "${SIG_HEADERS[@]}" \
     "${ENDPOINT}${path}"
 }

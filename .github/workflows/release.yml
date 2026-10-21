@@ -47,32 +47,44 @@ jobs:
 
       - name: Download RustFS binary blob
         run: |
-          # Determine RustFS blob version from packages/rustfs/spec
-          BLOB_FILE=$(grep -E '^\s+-\s+rustfs/' packages/rustfs/spec | head -1 \
-            | sed 's/.*rustfs\///' | tr -d ' ')
-          # BLOB_FILE is e.g. rustfs-linux-x86_64-musl-1.0.0-beta.3.zip
-          # Reconstruct asset name (upstream uses 'v' prefix in asset filename, not blob key)
-          # Pattern: rustfs-linux-x86_64-musl-1.0.0-beta.3.zip -> version = 1.0.0-beta.3
-          BLOB_VERSION=$(echo "${BLOB_FILE}" | sed 's/rustfs-linux-x86_64-musl-//' | sed 's/\.zip//')
-          ASSET="rustfs-linux-x86_64-musl-v${BLOB_VERSION}.zip"
-          DOWNLOAD_URL="https://github.com/rustfs/rustfs/releases/download/${BLOB_VERSION}/${ASSET}"
-          echo "Downloading ${DOWNLOAD_URL}"
-          curl -fLo "/tmp/${BLOB_FILE}" "${DOWNLOAD_URL}"
-
-          # Verify checksum against upstream SHA256SUMS
-          SUMS_URL="https://github.com/rustfs/rustfs/releases/download/${BLOB_VERSION}/SHA256SUMS"
-          if curl -fLo /tmp/SHA256SUMS "${SUMS_URL}" 2>/dev/null; then
-            # Extract the line for our asset name (upstream file lists v-prefixed name)
-            EXPECTED=$(grep "${ASSET}" /tmp/SHA256SUMS | awk '{print $1}')
-            ACTUAL=$(sha256sum "/tmp/${BLOB_FILE}" | awk '{print $1}')
-            if [ "${EXPECTED}" != "${ACTUAL}" ]; then
-              echo "SHA256 mismatch: expected ${EXPECTED}, got ${ACTUAL}"
-              exit 1
-            fi
-            echo "SHA256 verified: ${ACTUAL}"
-          else
-            echo "No upstream SHA256SUMS available; skipping checksum verification"
+          # The blob key in config/blobs.yml names the RustFS version, for
+          # example rustfs/rustfs-linux-x86_64-musl-1.0.3.zip.  The package
+          # spec holds only a glob, so it cannot tell us the version.
+          BLOB_KEYS=$(grep -E '^rustfs/rustfs-linux-x86_64-musl-[^:]+\.zip:' config/blobs.yml | sed 's/:$//')
+          if [ "$(printf '%s\n' "${BLOB_KEYS}" | grep -c .)" -ne 1 ]; then
+            echo "config/blobs.yml must list exactly one rustfs musl blob, found: ${BLOB_KEYS:-none}"
+            exit 1
           fi
+          BLOB_FILE="${BLOB_KEYS#rustfs/}"
+          BLOB_VERSION=$(echo "${BLOB_FILE}" | sed -e 's/^rustfs-linux-x86_64-musl-//' -e 's/\.zip$//')
+          # Upstream asset names carry a v prefix that the blob key drops.
+          ASSET="rustfs-linux-x86_64-musl-v${BLOB_VERSION}.zip"
+          BASE_URL="https://github.com/rustfs/rustfs/releases/download/${BLOB_VERSION}"
+          echo "Downloading ${BASE_URL}/${ASSET}"
+          curl -fLo "/tmp/${BLOB_FILE}" "${BASE_URL}/${ASSET}"
+
+          # Upstream publishes SHA256SUMS with every release, so a missing
+          # file or entry fails the build rather than shipping an unverified
+          # binary.
+          curl -fLo /tmp/SHA256SUMS "${BASE_URL}/SHA256SUMS"
+          EXPECTED=$(awk -v asset="${ASSET}" '$2 == asset || $2 == "*" asset {print $1}' /tmp/SHA256SUMS)
+          if [ -z "${EXPECTED}" ]; then
+            echo "${ASSET} is not listed in the upstream SHA256SUMS"
+            exit 1
+          fi
+          ACTUAL=$(sha256sum "/tmp/${BLOB_FILE}" | awk '{print $1}')
+          if [ "${EXPECTED}" != "${ACTUAL}" ]; then
+            echo "SHA256 mismatch: expected ${EXPECTED}, got ${ACTUAL}"
+            exit 1
+          fi
+          # config/blobs.yml records the same digest, so the blob we upload
+          # is the one the release was built and tested with.
+          RECORDED=$(awk -v key="${BLOB_KEYS}:" '$1 == key {found=1; next} found && $1 == "sha:" {sub(/^sha256:/, "", $2); print $2; exit}' config/blobs.yml)
+          if [ "${RECORDED}" != "${ACTUAL}" ]; then
+            echo "config/blobs.yml records ${RECORDED:-no sha256} for ${BLOB_KEYS}, but upstream serves ${ACTUAL}"
+            exit 1
+          fi
+          echo "SHA256 verified: ${ACTUAL}"
 
           bosh add-blob "/tmp/${BLOB_FILE}" "rustfs/${BLOB_FILE}"
           bosh upload-blobs

@@ -5,7 +5,7 @@
 # Must be run from the release root directory.
 #
 # Arguments:
-#   VERSION   RustFS release tag, e.g. 1.0.0-beta.9 (default: 1.0.0-beta.9)
+#   VERSION   RustFS release tag, e.g. 1.0.3 (default: 1.0.3)
 #   VARIANT   musl or gnu (default: musl; musl is statically linked, preferred)
 #
 # Prerequisites:
@@ -16,7 +16,7 @@
 #   bosh upload-blobs
 set -e -u -o pipefail
 
-VERSION="${1:-1.0.0-beta.9}"
+VERSION="${1:-1.0.3}"
 VARIANT="${2:-musl}"
 
 # Validate VARIANT
@@ -43,26 +43,36 @@ if ! curl -fL --progress-bar -o "${TMP}/${ASSET}" "${URL}"; then
   exit 1
 fi
 
-# Verify checksum if upstream provides SHA256SUMS for this release tag.
+# Verify the archive against upstream's SHA256SUMS.  Upstream publishes the
+# file with every release, so a missing file or a missing entry stops the
+# script instead of registering an unverified blob.
 echo "==> Fetching ${SUMS_URL}"
-if curl -fLs -o "${TMP}/SHA256SUMS" "${SUMS_URL}" 2>/dev/null; then
-  # SHA256SUMS lists the v-prefixed asset filename.
-  EXPECTED=$(grep "${ASSET}" "${TMP}/SHA256SUMS" | awk '{print $1}')
-  if [[ -z "${EXPECTED}" ]]; then
-    echo "WARN: asset not found in SHA256SUMS; skipping verification" >&2
-  else
-    ACTUAL=$(sha256sum "${TMP}/${ASSET}" | awk '{print $1}')
-    if [[ "${EXPECTED}" != "${ACTUAL}" ]]; then
-      echo "ERROR: SHA256 mismatch" >&2
-      echo "  expected: ${EXPECTED}" >&2
-      echo "  actual:   ${ACTUAL}" >&2
-      exit 1
-    fi
-    echo "==> SHA256 OK: ${ACTUAL}"
-  fi
-else
-  echo "WARN: upstream SHA256SUMS not available; skipping checksum verification" >&2
+if ! curl -fLs -o "${TMP}/SHA256SUMS" "${SUMS_URL}"; then
+  echo "ERROR: could not download ${SUMS_URL}; refusing to add an unverified blob" >&2
+  exit 1
 fi
+# SHA256SUMS lists the v-prefixed asset filename.
+EXPECTED=$(awk -v asset="${ASSET}" '$2 == asset || $2 == "*" asset {print $1}' "${TMP}/SHA256SUMS")
+if [[ -z "${EXPECTED}" ]]; then
+  echo "ERROR: ${ASSET} is not listed in SHA256SUMS; refusing to add an unverified blob" >&2
+  exit 1
+fi
+# sha256sum ships with Linux coreutils and shasum with macOS.
+if command -v sha256sum >/dev/null 2>&1; then
+  ACTUAL=$(sha256sum "${TMP}/${ASSET}" | awk '{print $1}')
+elif command -v shasum >/dev/null 2>&1; then
+  ACTUAL=$(shasum -a 256 "${TMP}/${ASSET}" | awk '{print $1}')
+else
+  echo "ERROR: neither sha256sum nor shasum is installed" >&2
+  exit 1
+fi
+if [[ "${EXPECTED}" != "${ACTUAL}" ]]; then
+  echo "ERROR: SHA256 mismatch" >&2
+  echo "  expected: ${EXPECTED}" >&2
+  echo "  actual:   ${ACTUAL}" >&2
+  exit 1
+fi
+echo "==> SHA256 OK: ${ACTUAL}"
 
 # Register blob with BOSH blobstore under the key expected by packages/rustfs/spec.
 BLOB_KEY="rustfs/${BLOB_KEY_FILE}"

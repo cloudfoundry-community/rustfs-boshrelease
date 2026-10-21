@@ -1,45 +1,52 @@
 #!/bin/bash
 set -eu
 
-# Require unzip — not always present on every stemcell variant.
-if ! which unzip >/dev/null 2>&1; then
-  echo "unzip not found in PATH; required to extract rustfs archive" >&2
+# The upstream archive is a zip, so the compile VM needs unzip.  Both the
+# ubuntu-noble and ubuntu-resolute stemcells install it.
+if ! command -v unzip >/dev/null 2>&1; then
+  echo "unzip not found in PATH; it is required to extract the rustfs archive" >&2
+  exit 1
+fi
+
+# The spec glob matches exactly one archive.  Refuse to guess when the blob
+# set holds none or several, because the wrong one would ship silently.
+shopt -s nullglob
+archives=(rustfs/rustfs-linux-x86_64-musl-*.zip)
+shopt -u nullglob
+if [ "${#archives[@]}" -eq 0 ]; then
+  echo "rustfs zip archive not found; check that the blob key matches the spec glob" >&2
+  exit 1
+fi
+if [ "${#archives[@]}" -gt 1 ]; then
+  echo "more than one rustfs zip archive found, remove all but one blob: ${archives[*]}" >&2
+  exit 1
+fi
+archive="${archives[0]}"
+
+# Extract inside the compile directory rather than /tmp, so that the
+# archive's contents never land in a directory shared with other packages.
+extract_dir="${PWD}/rustfs-extract"
+rm -rf "${extract_dir}"
+mkdir -p "${extract_dir}"
+
+echo "Extracting ${archive}..."
+unzip -q -o "${archive}" -d "${extract_dir}"
+
+# Upstream ships the binary at the top of the archive.  Search the tree so
+# that a versioned sub-directory in a later archive still works, but refuse
+# an archive that holds more than one rustfs file.
+mapfile -t binaries < <(find "${extract_dir}" -type f -name rustfs)
+if [ "${#binaries[@]}" -ne 1 ]; then
+  echo "expected exactly one rustfs binary inside ${archive}, found ${#binaries[@]}; archive contents:" >&2
+  find "${extract_dir}" -maxdepth 3 -type f >&2
   exit 1
 fi
 
 mkdir -p "${BOSH_INSTALL_TARGET}/bin"
-
-# Locate the rustfs zip archive matched by the spec glob.
-archive=$(ls rustfs/rustfs-linux-x86_64-musl-*.zip 2>/dev/null | head -n1)
-if [ -z "${archive}" ]; then
-  echo "rustfs zip archive not found — check blob key matches spec glob" >&2
-  exit 1
-fi
-
-echo "Extracting ${archive}..."
-extract_dir=/tmp/rustfs-extract-$$
-mkdir -p "${extract_dir}"
-unzip -q -o "${archive}" -d "${extract_dir}"
-
-# Locate the rustfs binary inside the extracted tree.
-# NOTE: zip structure from upstream is not guaranteed — R1 reports binary at top
-# level; if a versioned subdirectory is introduced this find covers both cases.
-binary=$(find "${extract_dir}" -name rustfs -type f -perm /111 | head -n1)
-if [ -z "${binary}" ]; then
-  # Fallback: any file named rustfs (catches non-executable bit edge cases).
-  binary=$(find "${extract_dir}" -name rustfs -type f | head -n1)
-fi
-if [ -z "${binary}" ]; then
-  echo "rustfs binary not found inside ${archive}; archive contents:" >&2
-  find "${extract_dir}" -maxdepth 3 -type f >&2
-  rm -rf "${extract_dir}"
-  exit 1
-fi
-
-cp "${binary}" "${BOSH_INSTALL_TARGET}/bin/rustfs"
-chmod 0755 "${BOSH_INSTALL_TARGET}/bin/rustfs"
-
+install -m 0755 "${binaries[0]}" "${BOSH_INSTALL_TARGET}/bin/rustfs"
 rm -rf "${extract_dir}"
 
-echo "Installed: ${BOSH_INSTALL_TARGET}/bin/rustfs"
-"${BOSH_INSTALL_TARGET}/bin/rustfs" --version 2>/dev/null || true
+# A binary that cannot report its version will not start either, so the
+# compile fails here instead of at deploy time.
+echo "Installed ${BOSH_INSTALL_TARGET}/bin/rustfs"
+"${BOSH_INSTALL_TARGET}/bin/rustfs" --version

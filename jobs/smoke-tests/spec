@@ -7,12 +7,11 @@ description: |
   performs a full S3 cycle — CreateBucket, PutObject, GetObject (content verify),
   DeleteObject, HeadObject (expect 404), DeleteBucket — against the first peer.
 
-  Authentication uses AWS Signature Version 2 via openssl + curl. No extra
-  packages are required beyond the Ubuntu Noble stemcell base tools (bash, curl,
-  openssl, base64, date).
-
-  Packages block is intentionally empty for v0.1. When a bundled mc or aws-cli
-  blob package is added, list it here and update templates/bin/run.erb accordingly.
+  Authentication uses AWS Signature Version 4, computed with openssl and od
+  and sent with curl.  Every x-amz-* header the errand sends is signed,
+  because RustFS 1.0 rejects unsigned ones.  No packages are needed beyond the base
+  tools that the ubuntu-noble and ubuntu-resolute stemcells ship (bash, curl,
+  openssl, od, and date).
 
 packages: []
 

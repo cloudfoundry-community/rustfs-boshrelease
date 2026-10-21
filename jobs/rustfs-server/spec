@@ -16,6 +16,7 @@ templates:
   config/env.sh.erb:       config/env.sh
   tls/api/rustfs_cert.pem.erb: tls/api/rustfs_cert.pem
   tls/api/rustfs_key.pem.erb:  tls/api/rustfs_key.pem
+  tls/ca.crt.erb:              tls/ca.crt
   tls/peer/ca.pem.erb:     tls/peer/ca.pem
   tls/peer/cert.pem.erb:   tls/peer/cert.pem
   tls/peer/key.pem.erb:    tls/peer/key.pem
@@ -130,32 +131,50 @@ properties:
 
   rustfs.tls.certificate:
     description: |
-      PEM-encoded TLS certificate for the S3 API endpoint. Written to
-      tls/api/rustfs_cert.pem — the filename RustFS discovers under
-      RUSTFS_TLS_PATH.
-      Optional — omit for plaintext HTTP.
+      PEM-encoded TLS certificate for the S3 API endpoint. Rendered to
+      tls/api/rustfs_cert.pem, which pre-start installs into the TLS
+      directory that RUSTFS_TLS_PATH names. Set it together with
+      rustfs.tls.key. Optional — omit both for plaintext HTTP.
 
   rustfs.tls.key:
     description: |
-      PEM-encoded TLS private key for the S3 API endpoint. Written to
-      tls/api/rustfs_key.pem — the filename RustFS discovers under
-      RUSTFS_TLS_PATH.
-      Optional — omit for plaintext HTTP.
+      PEM-encoded TLS private key for the S3 API endpoint. Rendered to
+      tls/api/rustfs_key.pem, which pre-start installs into the TLS
+      directory that RUSTFS_TLS_PATH names. Set it together with
+      rustfs.tls.certificate. Optional — omit both for plaintext HTTP.
+
+  rustfs.tls.ca:
+    description: |
+      PEM-encoded CA certificate that signed rustfs.tls.certificate. When it
+      is set, pre-start installs it as ca.crt next to the API key pair, and
+      RustFS trusts it when cluster peers dial each other over https. A TLS
+      cluster needs it, and every peer's API certificate must name that
+      peer's IP address. Optional for a single node.
+    default: ""
 
   rustfs.peer.tls.ca:
     description: |
-      PEM-encoded TLS CA certificate for verifying cluster peer connections.
-      Optional — omit to skip peer TLS.
+      Rendered to tls/peer/ca.pem.
+      RustFS does not read this file. Peers reach each other over the S3
+      API port and its rustfs.tls.* certificate, so peer trust comes from
+      rustfs.tls.ca. The property is kept so that existing manifests that
+      set it still deploy.
 
   rustfs.peer.tls.certificate:
     description: |
-      PEM-encoded TLS certificate for cluster peer communication.
-      Optional — omit to skip peer TLS.
+      Rendered to tls/peer/cert.pem.
+      RustFS does not read this file. Peers reach each other over the S3
+      API port and its rustfs.tls.* certificate, so peer trust comes from
+      rustfs.tls.ca. The property is kept so that existing manifests that
+      set it still deploy.
 
   rustfs.peer.tls.key:
     description: |
-      PEM-encoded TLS private key for cluster peer communication.
-      Optional — omit to skip peer TLS.
+      Rendered to tls/peer/key.pem.
+      RustFS does not read this file. Peers reach each other over the S3
+      API port and its rustfs.tls.* certificate, so peer trust comes from
+      rustfs.tls.ca. The property is kept so that existing manifests that
+      set it still deploy.
 
   rustfs.kms.enable:
     description: |

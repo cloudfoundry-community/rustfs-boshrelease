@@ -1,0 +1,15 @@
+---
+# Deploy on the ubuntu-resolute (26.04) stemcell.  bpm releases older than
+# 1.4.41 do not compile on resolute, because their tini package needs an
+# older CMake than resolute ships, so this also pins bpm 1.4.41.
+- type: replace
+  path: /stemcells/alias=default/os
+  value: ubuntu-resolute
+
+- type: replace
+  path: /releases/name=bpm
+  value:
+    name: bpm
+    version: 1.4.41
+    url: https://bosh.io/d/github.com/cloudfoundry/bpm-release?v=1.4.41
+    sha1: sha256:7b445508d63d2171d892ba33f836087e1e519b9782f44c5fa5290323616ca8e6

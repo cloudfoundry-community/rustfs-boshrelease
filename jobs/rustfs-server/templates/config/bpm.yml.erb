@@ -5,19 +5,26 @@
   store_path     = p('rustfs.persistent_disk_path')
   vols_per_node  = p('rustfs.volumes_per_node').to_i
 
+  # The API listener serves TLS when both halves of the key pair are set.
+  # RustFS serves internode RPC on the same port, so peers must dial it
+  # with https, or every TLS handshake fails and the cluster never forms.
+  tls_enabled = p('rustfs.tls.certificate', '').to_s.strip != '' &&
+                p('rustfs.tls.key', '').to_s.strip != ''
+  scheme      = tls_enabled ? 'https' : 'http'
+
   # Build RUSTFS_VOLUMES value.
   # Cluster mode (>1 instance): space-separated per-peer URLs.
   # RustFS brace expansion: {0...N-1} is inclusive upper-bound notation.
   # Single-node: local path with brace expansion or bare path.
   if peer_instances.length > 1
-    # Distributed mode.
-    # NOTE: RustFS distributed mode is marked "Under Testing" upstream as of
-    # 1.0.0-beta.9. Do NOT use in production without upstream GA validation.
+    # Distributed mode.  Upstream lists distributed mode as available since
+    # RustFS 1.0.0, but this release has not proven multi-node erasure
+    # coding on BOSH yet, so validate a cluster before trusting it.
     volumes_value = peer_instances.map do |inst|
       if vols_per_node == 1
-        "http://#{inst.address}:#{port}#{store_path}/data0"
+        "#{scheme}://#{inst.address}:#{port}#{store_path}/data0"
       else
-        "http://#{inst.address}:#{port}#{store_path}/data{0...#{vols_per_node - 1}}"
+        "#{scheme}://#{inst.address}:#{port}#{store_path}/data{0...#{vols_per_node - 1}}"
       end
     end.join(' ')
     cluster_mode = true
@@ -32,8 +39,8 @@
   end
 -%>
 ---
-# WARNING: RustFS distributed mode (cluster_mode: <%= cluster_mode %>) is marked
-# "Under Testing" upstream as of 1.0.0-beta.9. Not recommended for production.
+# cluster_mode: <%= cluster_mode %>.  Multi-node erasure coding has not been
+# proven on BOSH yet, so validate a cluster before trusting it with data.
 processes:
 - name: rustfs-server
   executable: /var/vcap/packages/rustfs/bin/rustfs
@@ -50,6 +57,9 @@ processes:
     RUSTFS_ADDRESS:         "0.0.0.0:<%= p('rustfs.port') %>"
     RUSTFS_CONSOLE_ADDRESS: "0.0.0.0:<%= p('rustfs.console_port') %>"
     RUSTFS_CONSOLE_ENABLE:  "<%= p('rustfs.console_enable') %>"
+
+    # S3 region that requests are signed for and responses report
+    RUSTFS_REGION: "<%= p('rustfs.region') %>"
 
     # Observability
     RUSTFS_OBS_LOGGER_LEVEL: "<%= p('rustfs.log_level') %>"
@@ -86,9 +96,12 @@ processes:
 <%   end -%>
 <% end -%>
 
-<% if_p('rustfs.tls.certificate', 'rustfs.tls.key') do |_cert, _key| -%>
-    # TLS — cert/key rendered into tls/api/ by template
-    RUSTFS_TLS_PATH: "/var/vcap/jobs/rustfs-server/tls/api"
+<% if tls_enabled -%>
+    # TLS.  pre-start installs rustfs_cert.pem, rustfs_key.pem, and, when
+    # rustfs.tls.ca is set, ca.crt into this directory, the names RustFS
+    # looks for under RUSTFS_TLS_PATH.  Peers trust ca.crt when they dial
+    # each other over https.
+    RUSTFS_TLS_PATH: "/var/vcap/data/rustfs-server/tls"
 <% end -%>
 
   limits:

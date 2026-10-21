@@ -6,33 +6,27 @@ blob management, and release process.
 ## Prerequisites
 
 - [BOSH CLI](https://bosh.io/docs/cli-v2/) v7 or later
-- Ruby 3.1+ (for running specs via `rspec`)
-- A BOSH director for integration testing (optional for unit specs)
+- `unzip`, `curl`, and `sha256sum` or `shasum` for `scripts/add-blob.sh`
+- A BOSH director for integration testing
 
 ## Development Setup
 
-Clone the repository and install Ruby dependencies:
+Clone the repository:
 
 ```bash
 git clone https://github.com/cloudfoundry-community/rustfs-boshrelease
 cd rustfs-boshrelease
-bundle install
 ```
 
 ## Adding or Updating Blobs
 
-Blobs are not stored in git. Download the RustFS binary and register it
-with the BOSH CLI:
+Blobs are not stored in git. The helper script downloads the RustFS binary, verifies it against upstream's `SHA256SUMS`, and registers it with the BOSH CLI, which updates `config/blobs.yml`:
 
 ```bash
-# Download the upstream binary
-curl -Lo /tmp/rustfs-linux-x86_64-musl-1.0.0-beta.9.zip \
-  https://github.com/rustfs/rustfs/releases/download/1.0.0-beta.9/rustfs-linux-x86_64-musl-v1.0.0-beta.9.zip
-
-# Register with BOSH (updates config/blobs.yml)
-bosh add-blob /tmp/rustfs-linux-x86_64-musl-1.0.0-beta.9.zip \
-  rustfs/rustfs-linux-x86_64-musl-1.0.0-beta.9.zip
+scripts/add-blob.sh 1.0.3 musl
 ```
+
+The package expects exactly one RustFS archive, so remove the old blob with `bosh remove-blob` before you add a new version.
 
 To upload blobs to the S3 blobstore (requires `config/private.yml`):
 
@@ -51,16 +45,9 @@ bosh create-release --force
 bosh -e <your-director> upload-release
 ```
 
-## Running Unit Specs
+## Testing Template Changes
 
-Template rendering specs live in `spec/jobs/`. Run them with:
-
-```bash
-bundle exec rspec spec/
-```
-
-Specs use `bosh-template` to render ERb templates without a running director.
-Add specs when adding or modifying job templates.
+The release has no template spec suite yet. Test template changes by building a dev release and deploying it, ideally on both a Noble and a Resolute stemcell, and then run the `smoke-tests` errand.
 
 ## Creating a Final Release
 
@@ -78,10 +65,6 @@ git push --tags
 ## Pull Request Guidelines
 
 - Keep changes focused on a single logical concern per PR.
-- Include or update `spec/` tests for any template changes.
+- Test template changes on a deployed dev release.
 - Update `CHANGELOG.md` with a summary of changes.
 - Do not commit `config/private.yml`, `blobs/`, or `.dev_builds/`.
-
-## Code of Conduct
-
-See [code-of-conduct.md](code-of-conduct.md).

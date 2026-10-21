@@ -2,12 +2,6 @@
 
 This document covers how to cut a new final release of rustfs-boshrelease.
 
-> **WARNING: RustFS Distributed Mode — Under Testing**
-> RustFS 1.0.0-beta.9 marks "Distributed Mode: Under Testing" in its feature matrix.
-> The BOSH release enables cluster mode when instances > 1, but cluster stability,
-> data durability, and node rejoin behavior have not been validated for production use.
-> Use single-node mode (standalone.yml ops file) until RustFS reaches GA.
-
 ## Prerequisites
 
 - `bosh` CLI installed and in `PATH` (`bosh --version`)
@@ -33,20 +27,17 @@ blobstore:
 Run the helper script from the release root:
 
 ```bash
-scripts/add-blob.sh 1.0.0-beta.9 musl
+scripts/add-blob.sh 1.0.3 musl
 ```
 
 Arguments:
 
-- First argument: RustFS version tag (e.g. `1.0.0-beta.9`)
+- First argument: RustFS version tag (e.g. `1.0.3`)
 - Second argument: variant — `musl` (default, statically linked) or `gnu`
 
-The script downloads the binary from the RustFS GitHub releases, verifies its SHA256
-checksum against upstream's `SHA256SUMS` file when available, and registers the blob
-with the local BOSH blobstore cache (`config/blobs.yml`).
+The script downloads the binary from the RustFS GitHub releases, verifies its SHA256 checksum against upstream's `SHA256SUMS` file, and registers the blob in the local blob cache and `config/blobs.yml`. It refuses to register the blob when upstream publishes no checksum for it or when the checksum does not match.
 
-To release a new version of the binary, update `packages/rustfs/spec` and
-`packages/rustfs/packaging` to reference the new version string, then re-run the script.
+Remove the previous RustFS blob with `bosh remove-blob` before you add the new one, because the package and the release workflow both expect exactly one RustFS archive.
 
 ### Step 2 — Upload blobs to S3
 
@@ -97,7 +88,7 @@ The GitHub Actions workflow:
 
 1. Installs `bosh` CLI
 2. Reconstructs `config/private.yml` from repository secrets
-3. Re-downloads the RustFS binary and re-runs `bosh upload-blobs`
+3. Re-downloads the RustFS binary named in `config/blobs.yml`, verifies it against upstream's `SHA256SUMS` and the digest in `config/blobs.yml`, and re-runs `bosh upload-blobs`
 4. Runs `bosh create-release --final --version X.Y.Z` to produce the release manifest
 5. Runs `bosh create-release <manifest> --tarball rustfs-X.Y.Z.tgz` to produce a
    self-contained tarball
@@ -110,13 +101,19 @@ Monitor the workflow at:
 
 ## Updating the RustFS Binary Version
 
-When a new upstream RustFS version is available:
+When a new upstream RustFS version is available, follow these steps:
 
-1. Update `packages/rustfs/spec` — change the filename in `files:` to the new version
-2. Update `packages/rustfs/packaging` — change the filename in the `unzip` and `cp` commands
-3. Run `scripts/add-blob.sh NEW_VERSION musl`
-4. Run `bosh upload-blobs`
-5. Create a new final release following Steps 3–6 above
+1. Remove the current blob with `bosh remove-blob rustfs/rustfs-linux-x86_64-musl-OLD_VERSION.zip`.
+
+2. Run `scripts/add-blob.sh NEW_VERSION musl`.
+
+3. Build a dev release and test it. The package spec matches the archive by a glob and the packaging script finds the binary inside it, so neither file needs editing for a version bump.
+
+4. Update the version references in `README.md` and add a `CHANGELOG.md` entry.
+
+5. Run `bosh upload-blobs`.
+
+6. Create a new final release following Steps 3 to 6 above.
 
 ## Required Repository Secrets
 

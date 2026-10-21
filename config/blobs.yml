@@ -1,4 +1,3 @@
-rustfs/rustfs-linux-x86_64-musl-1.0.0-beta.9.zip:
-  size: 71927586
-  object_id: d8788597-3b93-4abc-541c-d1170dd45fd2
-  sha: sha256:244e1fe098456938627f5cebbeed76033c7c862fec4dc52c386e4577a7edca39
+rustfs/rustfs-linux-x86_64-musl-1.0.3.zip:
+  size: 101926479
+  sha: sha256:29a083f156fe1a246f0336afe16ff77fffe587628e97339448d8f4fba38dba54

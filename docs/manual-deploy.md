@@ -7,7 +7,7 @@ This guide walks through deploying the rustfs release directly with the BOSH CLI
 - BOSH CLI installed and targeted at a director (`bosh env` shows a healthy director)
 - The rustfs release uploaded to that director
 - The `bpm` release uploaded
-- An Ubuntu Noble stemcell uploaded (`bosh stemcells` shows it)
+- An Ubuntu Noble or Ubuntu Resolute stemcell uploaded (`bosh stemcells` shows it)
 - Credentials for the object store S3 API (access key and secret key)
 
 ## Step 1: Upload the cloud-config
@@ -35,15 +35,17 @@ If the releases are not yet on the director, build and upload them from the rele
 bosh create-release --force
 bosh upload-release
 
-# bpm release (download from bosh.io or your release store)
-bosh upload-release https://bosh.io/d/github.com/cloudfoundry/bpm-release
+# bpm release, pinned to the version the manifest names
+bosh upload-release "https://bosh.io/d/github.com/cloudfoundry/bpm-release?v=1.4.22"
 ```
+
+The manifest pins bpm 1.4.22 for Noble. On Resolute, upload bpm 1.4.41 instead, because older bpm releases do not compile there.
 
 Upload the stemcell if not already present:
 
 ```bash
 bosh upload-stemcell https://bosh.io/d/stemcells/bosh-warden-boshlite-ubuntu-noble-go_agent
-# Replace with the stemcell appropriate for your IaaS.
+# Replace with the stemcell appropriate for your IaaS and OS.
 ```
 
 Confirm both releases and the stemcell appear:
@@ -70,6 +72,17 @@ The `manifests/ops/standalone.yml` ops file reduces the deployment to one instan
 ```bash
 bosh -d rustfs deploy manifests/rustfs.yml \
   -o manifests/ops/standalone.yml \
+  --var rustfs_access_key=<your-access-key> \
+  --var rustfs_secret_key=<your-secret-key>
+```
+
+### Resolute stemcell
+
+Add `manifests/ops/resolute.yml` to either deploy command above. It switches the stemcell to ubuntu-resolute and pins bpm 1.4.41.
+
+```bash
+bosh -d rustfs deploy manifests/rustfs.yml \
+  -o manifests/ops/resolute.yml \
   --var rustfs_access_key=<your-access-key> \
   --var rustfs_secret_key=<your-secret-key>
 ```
@@ -118,7 +131,7 @@ curl -v http://<instance-ip>:9000/
 curl -v --cacert /path/to/ca.crt https://<instance-ip>:9000/
 ```
 
-A `403 Forbidden` or `200 OK` response from the S3 API confirms the server is running. An empty response or `Connection refused` indicates the job has not started — check logs with:
+A `403 Forbidden` or `200 OK` response from the S3 API confirms the server is running, and `curl http://<instance-ip>:9000/health/live` returns `200` once the process is up. An empty response or `Connection refused` indicates the job has not started — check logs with:
 
 ```bash
 bosh -d rustfs logs rustfs/0

@@ -1,8 +1,10 @@
 #!/bin/bash
 set -eu
 
+JOB_DIR=/var/vcap/jobs/rustfs-server
 STORE_DIR=<%= p('rustfs.persistent_disk_path') %>
 DATA_DIR=/var/vcap/data/rustfs-server
+TLS_DIR="${DATA_DIR}/tls"
 
 # Create persistent data volume sub-directories.
 # Names match the volume paths emitted by bpm.yml.erb RUSTFS_VOLUMES.
@@ -21,5 +23,26 @@ mkdir -p "${DATA_DIR}/tmp"
 # BPM runs rustfs as vcap — ensure ownership before process starts.
 chown -R vcap:vcap "${STORE_DIR}" "${DATA_DIR}"
 chmod -R 0750 "${STORE_DIR}" "${DATA_DIR}"
+
+# Rebuild the TLS directory that RUSTFS_TLS_PATH names on every start, so
+# that it holds exactly what this deploy rendered.  BOSH renders every
+# template, including an empty CA file when rustfs.tls.ca is unset, and
+# RustFS refuses to start when the ca.crt it finds holds no certificate.
+# The CA is therefore installed only when it holds one.
+rm -rf "${TLS_DIR}"
+<% tls_enabled = p('rustfs.tls.certificate', '').to_s.strip != '' && p('rustfs.tls.key', '').to_s.strip != '' -%>
+<% if tls_enabled -%>
+install -d -o vcap -g vcap -m 0700 "${TLS_DIR}"
+install -o vcap -g vcap -m 0644 "${JOB_DIR}/tls/api/rustfs_cert.pem" "${TLS_DIR}/rustfs_cert.pem"
+install -o vcap -g vcap -m 0600 "${JOB_DIR}/tls/api/rustfs_key.pem"  "${TLS_DIR}/rustfs_key.pem"
+if grep -q -- '-----BEGIN CERTIFICATE-----' "${JOB_DIR}/tls/ca.crt"; then
+  install -o vcap -g vcap -m 0644 "${JOB_DIR}/tls/ca.crt" "${TLS_DIR}/ca.crt"
+<% if link('rustfs-peer').instances.length > 1 -%>
+else
+  echo "pre-start: rustfs.tls.ca is unset, so cluster peers cannot verify each other's API certificates" >&2
+  exit 1
+<% end -%>
+fi
+<% end -%>
 
 exit 0

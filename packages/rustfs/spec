@@ -4,7 +4,8 @@ name: rustfs
 dependencies: []
 
 files:
-  # Glob matches both blob-key naming (rustfs-linux-x86_64-musl-1.0.0-beta.9.zip)
-  # and upstream asset naming (rustfs-linux-x86_64-musl-v1.0.0-beta.9.zip).
-  # Use musl (static) build for stemcell compatibility — no glibc dependency.
+  # The glob matches the blob key (rustfs-linux-x86_64-musl-1.0.3.zip) and
+  # the upstream asset name (rustfs-linux-x86_64-musl-v1.0.3.zip).  We ship
+  # the statically linked musl build, so the binary needs no glibc or
+  # OpenSSL from the stemcell and runs the same on noble and resolute.
   - rustfs/rustfs-linux-x86_64-musl-*.zip

@@ -2,7 +2,7 @@
 set -eu
 
 PORT=<%= p('rustfs.port') %>
-<% tls = (p('rustfs.tls.certificate', '') != '') -%>
+<% tls = p('rustfs.tls.certificate', '').to_s.strip != '' && p('rustfs.tls.key', '').to_s.strip != '' -%>
 SCHEME=<%= tls ? 'https' : 'http' %>
 <% if tls -%>
 # Self-signed/internal CA — skip verification for the loopback probe.
