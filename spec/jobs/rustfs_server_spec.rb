@@ -128,6 +128,33 @@ describe 'rustfs release templates' do
         expect(out).to include('HEALTH_TIMEOUT=30')
         expect(out).to include('READY_TIMEOUT=45')
       end
+
+      it 'settles over three checks by default and never fewer than one' do
+        out = template.render(plain_props, spec: node(v4, 0), consumes: peers(v4))
+        expect(out).to include('SETTLE_CHECKS=3')
+        props = { 'rustfs' => creds.merge('post_start' => { 'settle_checks' => 0 }) }
+        out = template.render(props, spec: node(v4, 0), consumes: peers(v4))
+        expect(out).to include('SETTLE_CHECKS=1')
+      end
+    end
+
+    describe 'bin/s3-read-probe' do
+      let(:template) { job.template('bin/s3-read-probe') }
+
+      it 'single-quotes the credentials and verifies with the CA' do
+        props = { 'rustfs' => { 'access_key' => 'ak', 'secret_key' => "it's" }.merge(tls_props['rustfs'].slice('tls')) }
+        out = template.render(props, spec: node(v4, 0), consumes: peers(v4))
+        expect(out).to include("SECRET_KEY='it'\\''s'")
+        expect(out).to include("REGION='us-east-1'")
+        expect(out).to include('SCHEME=https')
+        expect(out).to include('CURL_TLS=(--cacert /var/vcap/jobs/rustfs-server/tls/ca.crt)')
+      end
+
+      it 'uses plain http without TLS' do
+        out = template.render(plain_props, spec: node(v4, 0), consumes: peers(v4))
+        expect(out).to include('SCHEME=http')
+        expect(out).to include('CURL_TLS=()')
+      end
     end
 
     describe 'bin/drain' do

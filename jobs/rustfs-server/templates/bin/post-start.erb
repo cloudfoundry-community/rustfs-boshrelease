@@ -22,25 +22,47 @@ set -u
   self_host = cluster ? url_host.call(spec.address) : '127.0.0.1'
 -%>
 
-# post-start: liveness first, then readiness when the cluster is formed.
+# post-start: liveness first, then proof that the node serves reads.
 #
 # A node that answers /health is running, but it may not have rejoined the
-# erasure set.  When at least one other peer already answers /health/ready,
-# the cluster is formed and this node is rejoining it, so we wait for this
-# node to become ready too.  BOSH then moves on to the next node only once
-# this one serves data again.
+# erasure set.  /health/ready is not enough on its own either.  It reads
+# local disk-handle state, so a node can report ready a few seconds before
+# it, or a peer, can actually reach the drives that a read needs.  Clients
+# see 503 for those seconds, and if BOSH stops the next node in that window,
+# reads fail until the cluster settles.
+#
+# So when at least one other peer already answers /health/ready, the
+# cluster is formed and this node is rejoining it, and we wait until all
+# of these hold, several checks in a row:
+#
+#   - this node and every other live peer answer /health/ready
+#   - none of them lists a drive in details.storage.unavailableDrives, so
+#     every node sees every drive again
+#   - an authenticated S3 read through this node succeeds (bin/s3-read-probe)
+#
+# A peer that does not even answer /health is down, so its drives cannot
+# be visible to anyone.  In that case we only require readiness and the
+# read, and we log which peer is down.  A drive that stays unavailable for
+# the whole ready timeout while reads succeed is a degraded cluster rather
+# than a rejoin in progress, so we pass then with a warning instead of
+# failing every deploy until the drive is replaced.
 #
 # When no other peer is ready, this is a fresh deploy or a cold start after
-# a full outage.  A new cluster is not ready until every node is up, and
+# a full outage.  A new cluster is not ready until enough nodes are up, and
 # BOSH starts the next node only after this script passes, so waiting here
 # would deadlock the deploy.  In that case liveness is enough.
+#
+# A single node has no peers to wait for, so it waits for its own readiness
+# and the read straight away.
 
+JOB_DIR=/var/vcap/jobs/rustfs-server
 PORT=<%= p('rustfs.port') %>
 SCHEME=<%= tls_enabled ? 'https' : 'http' %>
 SELF="<%= self_host %>"
 PEERS=(<%= others.map { |i| "\"#{url_host.call(i.address)}\"" }.join(' ') %>)
 HEALTH_TIMEOUT=<%= p('rustfs.post_start.health_timeout_secs').to_i %>
 READY_TIMEOUT=<%= p('rustfs.post_start.ready_timeout_secs').to_i %>
+SETTLE_CHECKS=<%= [p('rustfs.post_start.settle_checks').to_i, 1].max %>
 
 <% if tls_enabled && ca_set -%>
 CURL_TLS=(--cacert /var/vcap/jobs/rustfs-server/tls/ca.crt)
@@ -58,6 +80,24 @@ log() { echo "rustfs-server post-start: $*"; }
 probe() {
   curl -fsS -g -o /dev/null --connect-timeout 3 --max-time 5 \
     ${CURL_TLS[@]+"${CURL_TLS[@]}"} "${SCHEME}://$1:${PORT}$2" 2>/dev/null
+}
+
+# drive_state HOST: 0 when HOST is ready and sees every drive, 1 when it is
+# not ready, and 3 when it is ready but lists unavailable drives.  A body
+# without the unavailableDrives field, as from a RustFS that predates it,
+# counts as seeing every drive, so readiness alone decides.
+drive_state() {
+  local body
+  body="$(curl -fsS -g --connect-timeout 3 --max-time 5 \
+    ${CURL_TLS[@]+"${CURL_TLS[@]}"} "${SCHEME}://$1:${PORT}/health/ready" 2>/dev/null)" || return 1
+  case "${body}" in
+    *'"unavailableDrives"'*) ;;
+    *) return 0 ;;
+  esac
+  if printf '%s' "${body}" | grep -Eq '"unavailableDrives"[[:space:]]*:[[:space:]]*\[[[:space:]]*\]'; then
+    return 0
+  fi
+  return 3
 }
 
 # curl exits 51, 60, or 77 when the certificate cannot be verified or the
@@ -89,34 +129,100 @@ while :; do
 done
 
 if [ "${#PEERS[@]}" -eq 0 ]; then
-  log "single node, so there are no peers to compare readiness with"
-  exit 0
-fi
+  log "single node; waiting up to ${READY_TIMEOUT}s for it to serve reads"
+else
+  ready_peer=""
+  for peer in "${PEERS[@]}"; do
+    if probe "${peer}" /health/ready; then
+      ready_peer="${peer}"
+      break
+    fi
+  done
 
-ready_peer=""
-for peer in "${PEERS[@]}"; do
-  if probe "${peer}" /health/ready; then
-    ready_peer="${peer}"
-    break
+  if [ -z "${ready_peer}" ]; then
+    log "no other peer is ready, so this is a fresh deploy or a cold start; passing on liveness alone"
+    exit 0
   fi
-done
-
-if [ -z "${ready_peer}" ]; then
-  log "no other peer is ready, so this is a fresh deploy or a cold start; passing on liveness alone"
-  exit 0
+  log "peer ${ready_peer} is ready, so the cluster is formed; waiting up to ${READY_TIMEOUT}s for this node to rejoin and serve reads"
 fi
 
-log "peer ${ready_peer} is ready, so the cluster is formed; waiting up to ${READY_TIMEOUT}s for this node to rejoin"
-SECONDS=0
-while :; do
-  probe "${SELF}" /health/ready
+# check: one round of every condition.  Returns 0 when they all hold, 1
+# when one does not hold yet, 2 when waiting cannot help, and 3 when the
+# node serves reads but some drive is still unavailable.  Sets REASON to
+# what is still missing.
+REASON=""
+check() {
+  local down=() host state out rc
+  for host in "${PEERS[@]+"${PEERS[@]}"}"; do
+    probe "${host}" /health || down+=("${host}")
+  done
+
+  local missing=()
+  for host in "${SELF}" "${PEERS[@]+"${PEERS[@]}"}"; do
+    case " ${down[*]+"${down[*]}"} " in
+      *" ${host} "*) continue ;;
+    esac
+    drive_state "${host}"
+    state=$?
+    if [ "${state}" -eq 1 ]; then
+      REASON="${host} is not ready"
+      return 1
+    fi
+    [ "${state}" -eq 3 ] && missing+=("${host}")
+  done
+
+  out="$("${JOB_DIR}/bin/s3-read-probe" "${SELF}" 2>&1)"
   rc=$?
+  if [ "${rc}" -ne 0 ]; then
+    REASON="${out:-the read probe failed with exit ${rc}}"
+    [ "${rc}" -eq 2 ] && return 2
+    return 1
+  fi
+
+  if [ "${#missing[@]}" -gt 0 ] && [ "${#down[@]}" -eq 0 ]; then
+    REASON="unavailable drives reported by ${missing[*]}"
+    return 3
+  fi
+
+  if [ "${#down[@]}" -gt 0 ]; then
+    REASON="serving, but peers ${down[*]} are down, so not every drive can be visible"
+  else
+    REASON="${out}"
+  fi
+  return 0
+}
+
+SECONDS=0
+passes=0
+last=""
+while :; do
+  check
+  rc=$?
+  if [ "${rc}" -eq 2 ]; then
+    log "${REASON}" >&2
+    exit 1
+  fi
   if [ "${rc}" -eq 0 ]; then
-    log "ready after ${SECONDS}s"
+    passes=$((passes + 1))
+    if [ "${passes}" -ge "${SETTLE_CHECKS}" ]; then
+      log "serving after ${SECONDS}s: ${REASON}"
+      exit 0
+    fi
+    sleep 2
+    continue
+  fi
+
+  passes=0
+  if [ "${REASON}" != "${last}" ]; then
+    log "waiting at ${SECONDS}s: ${REASON}"
+    last="${REASON}"
+  fi
+  if [ "${SECONDS}" -ge "${READY_TIMEOUT}" ] && [ "${rc}" -eq 3 ]; then
+    log "WARNING: this node serves reads, but after ${READY_TIMEOUT}s there are still ${REASON}; passing, because a drive that stays unavailable this long needs an operator, not a longer wait" >&2
     exit 0
   fi
   if [ "${SECONDS}" -ge "${READY_TIMEOUT}" ]; then
-    log "did not become ready within ${READY_TIMEOUT}s although peer ${ready_peer} is ready (last curl exit ${rc}); see /var/vcap/sys/log/rustfs-server/rustfs-server.stderr.log" >&2
+    log "did not serve reads within ${READY_TIMEOUT}s: ${REASON}; see /var/vcap/sys/log/rustfs-server/rustfs-server.stderr.log" >&2
     exit 1
   fi
   sleep 2

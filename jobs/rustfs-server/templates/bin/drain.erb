@@ -18,12 +18,16 @@ set -u
   poll      = [p('rustfs.drain.poll_secs').to_i, 1].max
 -%>
 
-# drain: hold this node up until every other peer is ready.
+# drain: hold this node up until every other peer is ready and sees every
+# drive.
 #
 # BOSH stops one node at a time.  If it stops this node while another peer
 # is still rejoining, objects written during that window may be left
-# without enough shards to read.  So drain waits for every other peer to
-# answer /health/ready before it lets the stop go ahead.
+# without enough shards to read.  A peer can also answer /health/ready a
+# few seconds before it reaches every drive again, and once this node
+# stops, each remaining peer needs every other remaining drive to serve
+# reads.  So drain waits until every other peer answers /health/ready and
+# lists no drive in details.storage.unavailableDrives.
 #
 # This is a dynamic drain.  Printing a negative number tells BOSH to call
 # the script again after that many seconds with job_check_status; printing
@@ -56,6 +60,23 @@ log() { echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) drain[$1]: $2" >>"${LOG}" 2>/dev/nu
 probe() {
   curl -fsS -g -o /dev/null --connect-timeout 3 --max-time 5 \
     ${CURL_TLS[@]+"${CURL_TLS[@]}"} "${SCHEME}://$1:${PORT}$2" 2>/dev/null
+}
+
+# drive_state HOST: 0 when HOST is ready and sees every drive, 1 when it is
+# not ready, and 3 when it is ready but lists unavailable drives.  A body
+# without the unavailableDrives field counts as seeing every drive.
+drive_state() {
+  local body
+  body="$(curl -fsS -g --connect-timeout 3 --max-time 5 \
+    ${CURL_TLS[@]+"${CURL_TLS[@]}"} "${SCHEME}://$1:${PORT}/health/ready" 2>/dev/null)" || return 1
+  case "${body}" in
+    *'"unavailableDrives"'*) ;;
+    *) return 0 ;;
+  esac
+  if printf '%s' "${body}" | grep -Eq '"unavailableDrives"[[:space:]]*:[[:space:]]*\[[[:space:]]*\]'; then
+    return 0
+  fi
+  return 3
 }
 
 done_draining() {
@@ -92,13 +113,16 @@ fi
 
 waiting=()
 for peer in "${PEERS[@]}"; do
-  if ! probe "${peer}" /health/ready; then
-    waiting+=("${peer}")
-  fi
+  drive_state "${peer}"
+  case $? in
+    0) ;;
+    3) waiting+=("${peer}(drives)") ;;
+    *) waiting+=("${peer}") ;;
+  esac
 done
 
 if [ "${#waiting[@]}" -eq 0 ]; then
-  log "${MODE}" "every other peer is ready after ${waited}s, so the stop goes ahead"
+  log "${MODE}" "every other peer is ready and sees every drive after ${waited}s, so the stop goes ahead"
   done_draining
 fi
 

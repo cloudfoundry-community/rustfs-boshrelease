@@ -2,6 +2,28 @@
 
 All notable changes to rustfs-boshrelease are documented here.
 
+## 0.2.1 (2026-10-21)
+
+### Changed
+
+- Post-start now waits until a rejoining node actually serves reads, not only until it answers `/health/ready`. RustFS 1.0.3 answers readiness from local disk-handle state, and in a rolling restart a node reported ready while GETs through it still returned 503 for several seconds. Post-start now requires that this node and every other live peer are ready, that none of them lists an entry in `details.storage.unavailableDrives`, and that an authenticated read through this node succeeds, for several checks in a row. It still passes on liveness alone when no other peer is ready, so a fresh deploy or a cold start cannot deadlock.
+
+- A single node now waits in post-start for its own readiness and a read, bounded by `rustfs.post_start.ready_timeout_secs`.
+
+- When reads succeed but a drive is still unavailable at the end of the ready timeout, post-start logs a warning and passes, so a degraded cluster does not fail every deploy.
+
+- Drain now also waits until every other peer lists no unavailable drive, still bounded by `rustfs.drain.timeout_secs`.
+
+### Added
+
+- `bin/s3-read-probe` lists the buckets, lists one object in the first bucket, and reads that object's first byte through a given node with SigV4-signed requests built in bash. The secret key never reaches a command line. Exit 2 means that the credentials were refused or the certificate did not verify, and post-start fails at once on it.
+
+- `rustfs.post_start.settle_checks` (default 3) sets how many checks in a row, two seconds apart, must find the node serving.
+
+### Upgrading
+
+- BOSH runs the drain script of the release that is already deployed, so the first roll from 0.0.1, or from any dev build without a drain script, stops each node without a drain wait, while the new post-start still holds each node until it serves reads.
+
 ## 0.2.0 (2026-10-21)
 
 ### Changed

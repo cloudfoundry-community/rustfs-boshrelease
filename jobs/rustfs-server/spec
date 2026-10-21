@@ -14,6 +14,7 @@ packages:
 templates:
   bin/pre-start.erb:       bin/pre-start
   bin/post-start.erb:      bin/post-start
+  bin/s3-read-probe.erb:   bin/s3-read-probe
   bin/drain.erb:           bin/drain
   bin/post-deploy.erb:     bin/post-deploy
   config/bpm.yml.erb:      config/bpm.yml
@@ -219,21 +220,35 @@ properties:
 
   rustfs.post_start.ready_timeout_secs:
     description: |
-      How long post-start waits for this node's /health/ready endpoint once
-      it has found another peer that is already ready, which means the
-      cluster is formed and this node should rejoin it.  When no other
-      peer is ready, as on a fresh deploy or a cold start after a full
-      outage, post-start does not wait for readiness at all, because a
-      new cluster is not ready until every node is up.
+      How long post-start waits for this node to serve reads once it has
+      found another peer that is already ready, which means the cluster is
+      formed and this node should rejoin it.  Serving means that this node
+      and every other live peer answer /health/ready, that none of them
+      lists an unavailable drive, and that an authenticated S3 read through
+      this node succeeds.  A single node waits for its own readiness and
+      the read.  When no other peer is ready, as on a fresh deploy or a
+      cold start after a full outage, post-start does not wait at all,
+      because a new cluster is not ready until enough nodes are up.  When
+      reads succeed but a drive is still unavailable at the end of this
+      time, post-start logs a warning and passes, because a drive that
+      stays down that long needs an operator rather than a longer wait.
     default: 300
+
+  rustfs.post_start.settle_checks:
+    description: |
+      How many checks in a row, two seconds apart, must find the node
+      serving before post-start passes.  RustFS caches its readiness
+      answer for about a second, so more than one check keeps a single
+      early answer from letting BOSH move on to the next node.
+    default: 3
 
   rustfs.drain.timeout_secs:
     description: |
       Total time the drain script waits for every other peer to answer
-      /health/ready before it lets BOSH stop this node.  Once it passes,
-      drain logs that it gave up and lets the stop go ahead, so that
-      `bosh stop` and `bosh delete-deployment` of a whole cluster still
-      finish.  A single node never waits.
+      /health/ready and to see every drive before it lets BOSH stop this
+      node.  Once it passes, drain logs that it gave up and lets the stop
+      go ahead, so that `bosh stop` and `bosh delete-deployment` of a whole
+      cluster still finish.  A single node never waits.
     default: 600
 
   rustfs.drain.poll_secs:

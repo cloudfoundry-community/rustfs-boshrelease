@@ -1,0 +1,229 @@
+#!/bin/bash
+# s3-read-probe HOST: prove that the node at HOST serves an authenticated
+# S3 read, not only that it reports ready.
+#
+# It lists the buckets with the root credentials.  When there is a bucket,
+# it lists one object in the first bucket, and when there is an object, it
+# reads the first byte of it.  Each step goes through the object layer, so
+# a node that cannot reach read quorum answers 503 here even while its
+# /health/ready already says 200.  When there is no bucket or no object,
+# there is nothing a client could fail to read, so the listing is enough.
+#
+# Exit status:
+#   0  the node served every read
+#   1  the node did not serve a read yet (5xx, timeout, or refused connection)
+#   2  waiting will not help (the credentials were refused or the
+#      certificate did not verify)
+#
+# The secret key never reaches a command line.  printf is a shell builtin,
+# and openssl only hashes what arrives on stdin.
+set -u -o pipefail
+export LC_ALL=C
+# Bash 5.2 expands '&' in a ${var//pattern/replacement} to the matched
+# text, which would keep xml_text from decoding &amp;.
+shopt -u patsub_replacement 2>/dev/null || true
+<%
+  shq = lambda { |s| "'" + s.to_s.gsub("'") { "'\\''" } + "'" }
+
+  tls_enabled = p('rustfs.tls.certificate', '').to_s.strip != '' &&
+                p('rustfs.tls.key', '').to_s.strip != ''
+  ca_set      = p('rustfs.tls.ca', '').to_s.include?('BEGIN CERTIFICATE')
+-%>
+
+ACCESS_KEY=<%= shq.call(p('rustfs.access_key')) %>
+SECRET_KEY=<%= shq.call(p('rustfs.secret_key')) %>
+REGION=<%= shq.call(p('rustfs.region')) %>
+PORT=<%= p('rustfs.port') %>
+SCHEME=<%= tls_enabled ? 'https' : 'http' %>
+<% if tls_enabled && ca_set -%>
+CURL_TLS=(--cacert /var/vcap/jobs/rustfs-server/tls/ca.crt)
+<% elsif tls_enabled -%>
+CURL_TLS=(-k)
+<% else -%>
+CURL_TLS=()
+<% end -%>
+
+HOST="${1:?usage: s3-read-probe HOST}"
+HOST_HDR="${HOST}:${PORT}"
+ENDPOINT="${SCHEME}://${HOST_HDR}"
+EMPTY_SHA256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+
+say() { echo "s3-read-probe: $*"; }
+
+to_hex() {
+  od -An -v -tx1 | tr -d ' \n'
+}
+
+hex_to_esc() {
+  local hex="$1" out="" i
+  for ((i = 0; i < ${#hex}; i += 2)); do
+    out+="\\x${hex:i:2}"
+  done
+  printf '%s' "${out}"
+}
+
+# hmac_hex <key-hex> <data>: lowercase hex HMAC-SHA256, per RFC 2104.
+hmac_hex() {
+  local key_hex="$1" data="$2" ipad="" opad="" i b
+  if (( ${#key_hex} > 128 )); then
+    key_hex="$(printf '%b' "$(hex_to_esc "${key_hex}")" | openssl dgst -sha256 -binary | to_hex)"
+  fi
+  while (( ${#key_hex} < 128 )); do
+    key_hex+="00"
+  done
+  for ((i = 0; i < 128; i += 2)); do
+    b=$((16#${key_hex:i:2}))
+    printf -v ipad '%s\\x%02x' "${ipad}" $((b ^ 0x36))
+    printf -v opad '%s\\x%02x' "${opad}" $((b ^ 0x5c))
+  done
+  local inner
+  inner="$({ printf '%b' "${ipad}"; printf '%b' "${data}"; } | openssl dgst -sha256 -binary | to_hex)"
+  { printf '%b' "${opad}"; printf '%b' "$(hex_to_esc "${inner}")"; } | openssl dgst -sha256 -binary | to_hex
+}
+
+# uri_encode <string>: percent-encode every byte except the unreserved
+# characters and '/', which is how SigV4 wants an S3 object path.
+uri_encode() {
+  local s="$1" out="" c hex i
+  for ((i = 0; i < ${#s}; i++)); do
+    c="${s:i:1}"
+    case "${c}" in
+      [A-Za-z0-9._~/-]) out+="${c}" ;;
+      *) printf -v hex '%%%02X' "'${c}"; out+="${hex}" ;;
+    esac
+  done
+  printf '%s' "${out}"
+}
+
+# xml_text <body> <tag>: the text of the first <tag> element, unescaped.
+# Prints nothing when the element is missing or holds a character
+# reference that we do not decode.
+xml_text() {
+  local text
+  text="$(printf '%s' "$1" | grep -o "<$2>[^<]*</$2>" | head -n 1)"
+  text="${text#<$2>}"
+  text="${text%</$2>}"
+  case "${text}" in
+    *'&#'*) return 0 ;;
+  esac
+  text="${text//&lt;/<}"
+  text="${text//&gt;/>}"
+  text="${text//&quot;/\"}"
+  text="${text//&apos;/\'}"
+  text="${text//&amp;/&}"
+  printf '%s' "${text}"
+}
+
+# sign <path> <query>: set AUTH_HEADERS for a GET with an empty body.  The
+# query string must already be in canonical form, sorted and encoded.
+AUTH_HEADERS=()
+sign() {
+  local path="$1" query="$2"
+  local amzdate datestamp
+  amzdate="$(date -u +%Y%m%dT%H%M%SZ)"
+  datestamp="${amzdate%%T*}"
+
+  local signed_headers="host;x-amz-content-sha256;x-amz-date"
+  local canon_req
+  canon_req="GET\n${path}\n${query}\nhost:${HOST_HDR}\nx-amz-content-sha256:${EMPTY_SHA256}\nx-amz-date:${amzdate}\n\n${signed_headers}\n${EMPTY_SHA256}"
+  local cr_hash
+  cr_hash="$(printf '%b' "${canon_req}" | openssl dgst -sha256 -binary | to_hex)"
+
+  local scope="${datestamp}/${REGION}/s3/aws4_request"
+  local sts="AWS4-HMAC-SHA256\n${amzdate}\n${scope}\n${cr_hash}"
+
+  local k
+  k="$(printf '%s' "AWS4${SECRET_KEY}" | to_hex)"
+  k="$(hmac_hex "${k}" "${datestamp}")"
+  k="$(hmac_hex "${k}" "${REGION}")"
+  k="$(hmac_hex "${k}" "s3")"
+  k="$(hmac_hex "${k}" "aws4_request")"
+  local sig
+  sig="$(hmac_hex "${k}" "${sts}")"
+
+  AUTH_HEADERS=(
+    -H "Host: ${HOST_HDR}"
+    -H "x-amz-date: ${amzdate}"
+    -H "x-amz-content-sha256: ${EMPTY_SHA256}"
+    -H "Authorization: AWS4-HMAC-SHA256 Credential=${ACCESS_KEY}/${scope}, SignedHeaders=${signed_headers}, Signature=${sig}"
+  )
+}
+
+# get <path> <query> [curl args...]: a signed GET.  Sets CODE to the HTTP
+# status (000 when no response arrived) and BODY to the response body.
+CODE=000
+BODY=""
+get() {
+  local path="$1" query="$2"
+  shift 2
+  sign "${path}" "${query}"
+  local url="${ENDPOINT}${path}"
+  [ -n "${query}" ] && url+="?${query}"
+  local out rc=0
+  out="$(curl -sS -g --connect-timeout 3 --max-time 10 \
+    ${CURL_TLS[@]+"${CURL_TLS[@]}"} "${AUTH_HEADERS[@]}" "$@" \
+    -w '\n%{http_code}' "${url}" 2>/dev/null)" || rc=$?
+  case "${rc}" in
+    51|60|77)
+      say "the certificate at ${HOST_HDR} did not verify against the CA (curl exit ${rc})"
+      exit 2
+      ;;
+  esac
+  CODE="${out##*$'\n'}"
+  BODY="${out%$'\n'*}"
+  [ "${out}" = "${CODE}" ] && BODY=""
+  case "${CODE}" in
+    [0-9][0-9][0-9]) ;;
+    *) CODE=000 ;;
+  esac
+  return 0
+}
+
+# require <step>: classify CODE for a step that must answer 200.
+require() {
+  case "${CODE}" in
+    200) return 0 ;;
+    401|403)
+      say "${1} was refused with ${CODE}, so the root credentials do not match this node"
+      exit 2
+      ;;
+    *)
+      say "${1} answered ${CODE}"
+      exit 1
+      ;;
+  esac
+}
+
+get / ""
+require "ListBuckets"
+bucket="$(xml_text "${BODY}" Name)"
+if [ -z "${bucket}" ]; then
+  say "served ListBuckets; there is no bucket to read"
+  exit 0
+fi
+
+get "/$(uri_encode "${bucket}")" "list-type=2&max-keys=1"
+require "ListObjectsV2 on ${bucket}"
+key="$(xml_text "${BODY}" Key)"
+if [ -z "${key}" ]; then
+  say "served ListBuckets and ListObjectsV2 on ${bucket}; the bucket holds no object to read"
+  exit 0
+fi
+
+# A ranged GET reads the object's metadata and its first shard.  Any 4xx
+# also proves that the object layer answered, for example 400 for an
+# object encrypted with a customer key or 416 for an empty object.
+get "/$(uri_encode "${bucket}")/$(uri_encode "${key}")" "" -H "Range: bytes=0-0" -o /dev/null
+case "${CODE}" in
+  401|403)
+    require "GetObject on ${bucket}"
+    ;;
+  2??|4??)
+    say "served ListBuckets, ListObjectsV2, and GetObject on ${bucket} (${CODE})"
+    exit 0
+    ;;
+  *)
+    say "GetObject on ${bucket} answered ${CODE}"
+    exit 1
+    ;;
+esac
