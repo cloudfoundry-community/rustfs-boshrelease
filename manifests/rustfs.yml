@@ -12,6 +12,12 @@ releases:
   url: https://bosh.io/d/github.com/cloudfoundry/bpm-release?v=1.4.22
   sha1: sha256:51f2eab4b59939db733beb8f7905e461a732cc29d85e54f151f576cd5bf0c414
 
+# Link addresses must be IP addresses, because the peers dial each other by
+# them and the API certificate names them.  With DNS addresses, every
+# peer URL would carry a BOSH DNS name instead.
+features:
+  use_dns_addresses: false
+
 stemcells:
 - alias: default
   os: ubuntu-noble
@@ -21,12 +27,16 @@ update:
   canaries: 1
   max_in_flight: 1
   serial: true
-  canary_watch_time: 5000-120000
-  update_watch_time: 5000-120000
+  # post-start waits for a rejoining node to become ready, and drain waits
+  # for the other peers before a node stops, so allow ten minutes.
+  canary_watch_time: 30000-600000
+  update_watch_time: 30000-600000
 
 instance_groups:
 - name: rustfs
-  instances: 4
+  # The node count is fixed at the first deploy, because RustFS cannot grow
+  # or shrink a formed cluster in place.  A cluster needs three or more.
+  instances: 3
   azs: [z1, z2, z3]
   vm_type: rustfs
   stemcell: default
