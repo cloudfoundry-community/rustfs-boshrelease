@@ -24,6 +24,8 @@ All notable changes to rustfs-boshrelease are documented here.
 
 - BOSH runs the drain script of the release that is already deployed, so the first roll from 0.0.1, or from any dev build without a drain script, stops each node without a drain wait, while the new post-start still holds each node until it serves reads.
 
+- A rolling deploy cannot change `rustfs.access_key` or `rustfs.secret_key` on a cluster, because the nodes authenticate to each other with them, and the first node's post-start fails at the ready timeout. The README section "Rolling updates, post-start, and drain" now gives the stop, deploy, and start sequence that changes them.
+
 ## 0.2.0 (2026-10-21)
 
 ### Changed
