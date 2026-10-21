@@ -3,7 +3,10 @@ name: rustfs-server
 
 description: |
   RustFS S3-compatible object storage server. Managed by bpm.
-  Scales 1 to N via the rustfs-peer BOSH link for cluster peer discovery.
+  Cluster peers find each other through the rustfs-peer BOSH link.  The
+  node count is fixed at the first deploy, because RustFS cannot grow a
+  single node into a cluster or change the size of a formed cluster in
+  place.  A cluster needs at least three nodes.
 
 packages:
   - rustfs
@@ -11,6 +14,7 @@ packages:
 templates:
   bin/pre-start.erb:       bin/pre-start
   bin/post-start.erb:      bin/post-start
+  bin/drain.erb:           bin/drain
   bin/post-deploy.erb:     bin/post-deploy
   config/bpm.yml.erb:      config/bpm.yml
   config/env.sh.erb:       config/env.sh
@@ -86,8 +90,8 @@ properties:
       Combined with the peer count from the rustfs-peer link to build
       RUSTFS_VOLUMES. Keep at 1 on BOSH: RustFS requires each local data
       volume to live on a distinct physical disk, and a BOSH instance has
-      a single persistent disk. Erasure coding spans nodes instead — use
-      4 or more instances. Values above 1 fail RustFS disk validation at
+      a single persistent disk. Erasure coding spans nodes instead, so use
+      three or more instances. Values above 1 fail RustFS disk validation at
       startup unless unsafe_bypass_disk_check is enabled.
     default: 1
 
@@ -134,22 +138,29 @@ properties:
       PEM-encoded TLS certificate for the S3 API endpoint. Rendered to
       tls/api/rustfs_cert.pem, which pre-start installs into the TLS
       directory that RUSTFS_TLS_PATH names. Set it together with
-      rustfs.tls.key. Optional — omit both for plaintext HTTP.
+      rustfs.tls.key, or omit both for plaintext HTTP.  Template rendering
+      fails when only one of the two is set, rather than falling back to
+      plaintext.
 
   rustfs.tls.key:
     description: |
       PEM-encoded TLS private key for the S3 API endpoint. Rendered to
       tls/api/rustfs_key.pem, which pre-start installs into the TLS
       directory that RUSTFS_TLS_PATH names. Set it together with
-      rustfs.tls.certificate. Optional — omit both for plaintext HTTP.
+      rustfs.tls.certificate, or omit both for plaintext HTTP.  Template
+      rendering fails when only one of the two is set.
 
   rustfs.tls.ca:
     description: |
       PEM-encoded CA certificate that signed rustfs.tls.certificate. When it
       is set, pre-start installs it as ca.crt next to the API key pair, and
-      RustFS trusts it when cluster peers dial each other over https. A TLS
+      RustFS trusts it when cluster peers dial each other over https.  The
+      post-start and drain scripts verify every node against it too.  A TLS
       cluster needs it, and every peer's API certificate must name that
-      peer's IP address. Optional for a single node.
+      peer's link address, so template rendering fails for a TLS cluster
+      without it.  On a single node the post-start check dials 127.0.0.1,
+      so the certificate must name 127.0.0.1 when this CA is set.  Without
+      it, a single TLS node is probed without verification.
     default: ""
 
   rustfs.peer.tls.ca:
@@ -199,6 +210,37 @@ properties:
       Vault token for KMS authentication (RUSTFS_KMS_VAULT_TOKEN).
       Required when kms.backend is vault, vault-kv2, or vault-transit.
     default: ""
+
+  rustfs.post_start.health_timeout_secs:
+    description: |
+      How long post-start waits for this node's /health endpoint to answer
+      before it fails the start.
+    default: 120
+
+  rustfs.post_start.ready_timeout_secs:
+    description: |
+      How long post-start waits for this node's /health/ready endpoint once
+      it has found another peer that is already ready, which means the
+      cluster is formed and this node should rejoin it.  When no other
+      peer is ready, as on a fresh deploy or a cold start after a full
+      outage, post-start does not wait for readiness at all, because a
+      new cluster is not ready until every node is up.
+    default: 300
+
+  rustfs.drain.timeout_secs:
+    description: |
+      Total time the drain script waits for every other peer to answer
+      /health/ready before it lets BOSH stop this node.  Once it passes,
+      drain logs that it gave up and lets the stop go ahead, so that
+      `bosh stop` and `bosh delete-deployment` of a whole cluster still
+      finish.  A single node never waits.
+    default: 600
+
+  rustfs.drain.poll_secs:
+    description: |
+      Seconds between drain checks.  Drain returns this as a negative
+      number, which makes BOSH call it again after that many seconds.
+    default: 5
 
   rustfs.bpm.open_files:
     description: BPM open_files ulimit for the rustfs-server process.

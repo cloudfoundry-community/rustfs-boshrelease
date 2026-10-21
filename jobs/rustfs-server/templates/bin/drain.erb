@@ -1,0 +1,112 @@
+#!/bin/bash
+set -u
+<%
+  url_host = lambda { |a| a.to_s.include?(':') && !a.to_s.start_with?('[') ? "[#{a}]" : a.to_s }
+
+  peers       = link('rustfs-peer').instances
+  cluster     = peers.length > 1
+  tls_enabled = p('rustfs.tls.certificate', '').to_s.strip != '' &&
+                p('rustfs.tls.key', '').to_s.strip != ''
+  ca_set      = p('rustfs.tls.ca', '').to_s.include?('BEGIN CERTIFICATE')
+
+  others = peers.reject do |i|
+    (!spec.id.nil? && i.id == spec.id) ||
+      (spec.id.nil? && [spec.address, spec.ip].compact.include?(i.address))
+  end
+
+  self_host = cluster ? url_host.call(spec.address) : '127.0.0.1'
+  poll      = [p('rustfs.drain.poll_secs').to_i, 1].max
+-%>
+
+# drain: hold this node up until every other peer is ready.
+#
+# BOSH stops one node at a time.  If it stops this node while another peer
+# is still rejoining, objects written during that window may be left
+# without enough shards to read.  So drain waits for every other peer to
+# answer /health/ready before it lets the stop go ahead.
+#
+# This is a dynamic drain.  Printing a negative number tells BOSH to call
+# the script again after that many seconds with job_check_status; printing
+# 0 lets the stop proceed.  Only the number goes to stdout, and everything
+# else goes to the log.  The total wait is bounded, so that stopping or
+# deleting a whole cluster still finishes.
+
+PORT=<%= p('rustfs.port') %>
+SCHEME=<%= tls_enabled ? 'https' : 'http' %>
+SELF="<%= self_host %>"
+PEERS=(<%= others.map { |i| "\"#{url_host.call(i.address)}\"" }.join(' ') %>)
+TIMEOUT=<%= p('rustfs.drain.timeout_secs').to_i %>
+POLL=<%= poll %>
+
+<% if tls_enabled && ca_set -%>
+CURL_TLS=(--cacert /var/vcap/jobs/rustfs-server/tls/ca.crt)
+<% elsif tls_enabled -%>
+CURL_TLS=(-k)
+<% else -%>
+CURL_TLS=()
+<% end -%>
+
+LOG_DIR=/var/vcap/sys/log/rustfs-server
+LOG="${LOG_DIR}/drain.log"
+STATE=/var/vcap/data/rustfs-server/drain.started
+
+mkdir -p "${LOG_DIR}" "$(dirname "${STATE}")" 2>/dev/null || true
+log() { echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) drain[$1]: $2" >>"${LOG}" 2>/dev/null || true; }
+
+probe() {
+  curl -fsS -g -o /dev/null --connect-timeout 3 --max-time 5 \
+    ${CURL_TLS[@]+"${CURL_TLS[@]}"} "${SCHEME}://$1:${PORT}$2" 2>/dev/null
+}
+
+done_draining() {
+  rm -f "${STATE}"
+  echo 0
+  exit 0
+}
+
+MODE="${1:-job_shutdown}"
+now=$(date +%s)
+
+# Every first call starts a new bounded wait.  A status call reuses the
+# start time recorded by the first call, or starts one if it is missing.
+if [ "${MODE}" != "job_check_status" ] || ! [ -s "${STATE}" ]; then
+  echo "${now}" >"${STATE}"
+fi
+started=$(cat "${STATE}" 2>/dev/null || echo "${now}")
+case "${started}" in
+  ''|*[!0-9]*) started="${now}"; echo "${now}" >"${STATE}" ;;
+esac
+waited=$((now - started))
+
+if [ "${#PEERS[@]}" -eq 0 ]; then
+  log "${MODE}" "single node, nothing to wait for"
+  done_draining
+fi
+
+# If this node is not ready itself, the cluster has already lost quorum
+# or this node never joined, and waiting cannot protect any data.
+if ! probe "${SELF}" /health/ready; then
+  log "${MODE}" "this node is not ready, so the stop goes ahead without waiting"
+  done_draining
+fi
+
+waiting=()
+for peer in "${PEERS[@]}"; do
+  if ! probe "${peer}" /health/ready; then
+    waiting+=("${peer}")
+  fi
+done
+
+if [ "${#waiting[@]}" -eq 0 ]; then
+  log "${MODE}" "every other peer is ready after ${waited}s, so the stop goes ahead"
+  done_draining
+fi
+
+if [ "${waited}" -ge "${TIMEOUT}" ]; then
+  log "${MODE}" "gave up after ${waited}s; still not ready: ${waiting[*]}; the stop goes ahead anyway"
+  done_draining
+fi
+
+log "${MODE}" "waited ${waited}s of ${TIMEOUT}s; not ready yet: ${waiting[*]}"
+echo "-${POLL}"
+exit 0

@@ -1,29 +1,123 @@
 #!/bin/bash
-set -eu
+set -u
+<%
+  # Bracket IPv6 literals so that they can sit inside a URL.
+  url_host = lambda { |a| a.to_s.include?(':') && !a.to_s.start_with?('[') ? "[#{a}]" : a.to_s }
+
+  peers       = link('rustfs-peer').instances
+  cluster     = peers.length > 1
+  tls_enabled = p('rustfs.tls.certificate', '').to_s.strip != '' &&
+                p('rustfs.tls.key', '').to_s.strip != ''
+  ca_set      = p('rustfs.tls.ca', '').to_s.include?('BEGIN CERTIFICATE')
+
+  # Every peer except this one.  The link instance id matches spec.id; the
+  # address comparison covers renderers that leave the id unset.
+  others = peers.reject do |i|
+    (!spec.id.nil? && i.id == spec.id) ||
+      (spec.id.nil? && [spec.address, spec.ip].compact.include?(i.address))
+  end
+
+  # A cluster node dials its own link address, because that is the name
+  # its API certificate carries for it.  A single node dials loopback.
+  self_host = cluster ? url_host.call(spec.address) : '127.0.0.1'
+-%>
+
+# post-start: liveness first, then readiness when the cluster is formed.
+#
+# A node that answers /health is running, but it may not have rejoined the
+# erasure set.  When at least one other peer already answers /health/ready,
+# the cluster is formed and this node is rejoining it, so we wait for this
+# node to become ready too.  BOSH then moves on to the next node only once
+# this one serves data again.
+#
+# When no other peer is ready, this is a fresh deploy or a cold start after
+# a full outage.  A new cluster is not ready until every node is up, and
+# BOSH starts the next node only after this script passes, so waiting here
+# would deadlock the deploy.  In that case liveness is enough.
 
 PORT=<%= p('rustfs.port') %>
-<% tls = p('rustfs.tls.certificate', '').to_s.strip != '' && p('rustfs.tls.key', '').to_s.strip != '' -%>
-SCHEME=<%= tls ? 'https' : 'http' %>
-<% if tls -%>
-# Self-signed/internal CA — skip verification for the loopback probe.
+SCHEME=<%= tls_enabled ? 'https' : 'http' %>
+SELF="<%= self_host %>"
+PEERS=(<%= others.map { |i| "\"#{url_host.call(i.address)}\"" }.join(' ') %>)
+HEALTH_TIMEOUT=<%= p('rustfs.post_start.health_timeout_secs').to_i %>
+READY_TIMEOUT=<%= p('rustfs.post_start.ready_timeout_secs').to_i %>
+
+<% if tls_enabled && ca_set -%>
+CURL_TLS=(--cacert /var/vcap/jobs/rustfs-server/tls/ca.crt)
+<% elsif tls_enabled -%>
+# A single node with TLS and no CA has nothing to verify against.  The
+# job refuses this combination for a cluster.
 CURL_TLS=(-k)
 <% else -%>
 CURL_TLS=()
 <% end -%>
-TIMEOUT=120
-elapsed=0
 
-# Wait for the S3 API liveness endpoint to respond.
-# RustFS exposes GET /health when RUSTFS_HEALTH_ENDPOINT_ENABLE=true (default).
-# The scheme follows the TLS configuration above (https when a cert is set).
-while [ "${elapsed}" -lt "${TIMEOUT}" ]; do
-  if curl -fsS "${CURL_TLS[@]}" "${SCHEME}://127.0.0.1:${PORT}/health" >/dev/null 2>&1; then
-    echo "rustfs-server: healthy after ${elapsed}s"
-    exit 0
+log() { echo "rustfs-server post-start: $*"; }
+
+# probe HOST PATH: prints nothing and returns curl's exit status.
+probe() {
+  curl -fsS -g -o /dev/null --connect-timeout 3 --max-time 5 \
+    ${CURL_TLS[@]+"${CURL_TLS[@]}"} "${SCHEME}://$1:${PORT}$2" 2>/dev/null
+}
+
+# curl exits 51, 60, or 77 when the certificate cannot be verified or the
+# CA cannot be read.  Waiting will not fix that, so fail at once.
+tls_fatal() {
+  case "$1" in
+    51|60|77) return 0 ;;
+    *)        return 1 ;;
+  esac
+}
+
+SECONDS=0
+while :; do
+  probe "${SELF}" /health
+  rc=$?
+  if [ "${rc}" -eq 0 ]; then
+    log "healthy after ${SECONDS}s at ${SCHEME}://${SELF}:${PORT}/health"
+    break
+  fi
+  if tls_fatal "${rc}"; then
+    log "the certificate at ${SELF}:${PORT} did not verify against the CA (curl exit ${rc}); check that the API certificate names ${SELF}" >&2
+    exit 1
+  fi
+  if [ "${SECONDS}" -ge "${HEALTH_TIMEOUT}" ]; then
+    log "did not answer /health within ${HEALTH_TIMEOUT}s (last curl exit ${rc})" >&2
+    exit 1
   fi
   sleep 2
-  elapsed=$((elapsed + 2))
 done
 
-echo "rustfs-server: did not become healthy within ${TIMEOUT}s" >&2
-exit 1
+if [ "${#PEERS[@]}" -eq 0 ]; then
+  log "single node, so there are no peers to compare readiness with"
+  exit 0
+fi
+
+ready_peer=""
+for peer in "${PEERS[@]}"; do
+  if probe "${peer}" /health/ready; then
+    ready_peer="${peer}"
+    break
+  fi
+done
+
+if [ -z "${ready_peer}" ]; then
+  log "no other peer is ready, so this is a fresh deploy or a cold start; passing on liveness alone"
+  exit 0
+fi
+
+log "peer ${ready_peer} is ready, so the cluster is formed; waiting up to ${READY_TIMEOUT}s for this node to rejoin"
+SECONDS=0
+while :; do
+  probe "${SELF}" /health/ready
+  rc=$?
+  if [ "${rc}" -eq 0 ]; then
+    log "ready after ${SECONDS}s"
+    exit 0
+  fi
+  if [ "${SECONDS}" -ge "${READY_TIMEOUT}" ]; then
+    log "did not become ready within ${READY_TIMEOUT}s although peer ${ready_peer} is ready (last curl exit ${rc}); see /var/vcap/sys/log/rustfs-server/rustfs-server.stderr.log" >&2
+    exit 1
+  fi
+  sleep 2
+done
