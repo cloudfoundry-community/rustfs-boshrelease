@@ -8,23 +8,40 @@
   # The API listener serves TLS when both halves of the key pair are set.
   # RustFS serves internode RPC on the same port, so peers must dial it
   # with https, or every TLS handshake fails and the cluster never forms.
-  tls_enabled = p('rustfs.tls.certificate', '').to_s.strip != '' &&
-                p('rustfs.tls.key', '').to_s.strip != ''
+  tls_cert_set = p('rustfs.tls.certificate', '').to_s.strip != ''
+  tls_key_set  = p('rustfs.tls.key', '').to_s.strip != ''
+  if tls_cert_set != tls_key_set
+    missing = tls_cert_set ? 'rustfs.tls.key' : 'rustfs.tls.certificate'
+    present = tls_cert_set ? 'rustfs.tls.certificate' : 'rustfs.tls.key'
+    raise "#{present} is set but #{missing} is not. Set both halves of the key pair for TLS, or neither for plaintext HTTP."
+  end
+  tls_enabled = tls_cert_set && tls_key_set
   scheme      = tls_enabled ? 'https' : 'http'
+
+  if tls_enabled && peer_instances.length > 1 &&
+     !p('rustfs.tls.ca', '').to_s.include?('BEGIN CERTIFICATE')
+    raise "rustfs.tls.ca must hold the CA certificate that signed rustfs.tls.certificate, because cluster peers verify each other's API certificates against it."
+  end
+
+  # Bracket IPv6 literals so that they can sit inside a URL, and listen on
+  # the IPv6 wildcard when any peer address is IPv6.
+  url_host  = lambda { |a| a.to_s.include?(':') && !a.to_s.start_with?('[') ? "[#{a}]" : a.to_s }
+  ipv6      = peer_instances.any? { |i| i.address.to_s.include?(':') } ||
+              spec.address.to_s.include?(':')
+  bind_host = ipv6 ? '[::]' : '0.0.0.0'
 
   # Build RUSTFS_VOLUMES value.
   # Cluster mode (>1 instance): space-separated per-peer URLs.
   # RustFS brace expansion: {0...N-1} is inclusive upper-bound notation.
   # Single-node: local path with brace expansion or bare path.
   if peer_instances.length > 1
-    # Distributed mode.  Upstream lists distributed mode as available since
-    # RustFS 1.0.0, but this release has not proven multi-node erasure
-    # coding on BOSH yet, so validate a cluster before trusting it.
+    # Distributed mode.  The node count is fixed when the cluster first
+    # forms, because RustFS refuses to grow or shrink a pool in place.
     volumes_value = peer_instances.map do |inst|
       if vols_per_node == 1
-        "#{scheme}://#{inst.address}:#{port}#{store_path}/data0"
+        "#{scheme}://#{url_host.call(inst.address)}:#{port}#{store_path}/data0"
       else
-        "#{scheme}://#{inst.address}:#{port}#{store_path}/data{0...#{vols_per_node - 1}}"
+        "#{scheme}://#{url_host.call(inst.address)}:#{port}#{store_path}/data{0...#{vols_per_node - 1}}"
       end
     end.join(' ')
     cluster_mode = true
@@ -39,8 +56,7 @@
   end
 -%>
 ---
-# cluster_mode: <%= cluster_mode %>.  Multi-node erasure coding has not been
-# proven on BOSH yet, so validate a cluster before trusting it with data.
+# cluster_mode: <%= cluster_mode %>
 processes:
 - name: rustfs-server
   executable: /var/vcap/packages/rustfs/bin/rustfs
@@ -54,8 +70,8 @@ processes:
     RUSTFS_SECRET_KEY: "<%= p('rustfs.secret_key') %>"
 
     # Network binding
-    RUSTFS_ADDRESS:         "0.0.0.0:<%= p('rustfs.port') %>"
-    RUSTFS_CONSOLE_ADDRESS: "0.0.0.0:<%= p('rustfs.console_port') %>"
+    RUSTFS_ADDRESS:         "<%= bind_host %>:<%= p('rustfs.port') %>"
+    RUSTFS_CONSOLE_ADDRESS: "<%= bind_host %>:<%= p('rustfs.console_port') %>"
     RUSTFS_CONSOLE_ENABLE:  "<%= p('rustfs.console_enable') %>"
 
     # S3 region that requests are signed for and responses report
