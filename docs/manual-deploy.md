@@ -57,7 +57,9 @@ bosh stemcells
 
 ## Step 3: Deploy
 
-### Production (4-node, `rustfs` network)
+### Production (three nodes, `rustfs` network)
+
+The node count is fixed at the first deploy, because RustFS cannot grow or shrink a formed cluster in place, so choose it before you deploy. A cluster needs at least three nodes.
 
 ```bash
 bosh -d rustfs deploy manifests/rustfs.yml \

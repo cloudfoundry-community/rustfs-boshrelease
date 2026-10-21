@@ -14,9 +14,17 @@ All notable changes to rustfs-boshrelease are documented here.
 
 - Pre-start now assembles the TLS directory at `/var/vcap/data/rustfs-server/tls` and the job sets `RUSTFS_TLS_PATH` to it. The directory holds `rustfs_cert.pem`, `rustfs_key.pem`, and, when a CA is set, `ca.crt`. RustFS 1.0.3 refuses to start when it finds an empty `ca.crt`, so pre-start installs the CA only when it holds a certificate.
 
-- TLS is enabled only when both `rustfs.tls.certificate` and `rustfs.tls.key` are set, and post-start uses the same test.
+- TLS is enabled only when both `rustfs.tls.certificate` and `rustfs.tls.key` are set. Template rendering fails when only one of the two is set, and when a multi-node TLS deployment has no `rustfs.tls.ca`.
 
-- `jobs/smoke-tests` signs S3 requests with AWS Signature Version 4 in place of the deprecated SigV2, which RustFS rejects with `403`. The HMAC chain is derived with `openssl` and hex-encoded with `od`, so the errand needs no `xxd` or vim-common.
+- Post-start still waits for `/health`, and then waits for `/health/ready` when at least one other peer is already ready, which means the node is rejoining a formed cluster. When no other peer is ready, as on a fresh deploy or a cold start, it passes on liveness alone so that cluster formation cannot deadlock. Every probe verifies the node against the CA by its link address instead of using `curl -k`.
+
+- IPv6 peer addresses are bracketed in `RUSTFS_VOLUMES` and in every probe URL, and the server listens on `[::]` when any address is IPv6.
+
+- `manifests/rustfs.yml` runs three nodes, turns off DNS link addresses, and allows ten minutes of watch time per node.
+
+- `jobs/smoke-tests` signs S3 requests with AWS Signature Version 4 in place of the deprecated SigV2, which RustFS rejects with `403`. The HMAC chain is built in bash, hashed with `openssl` on stdin, and hex-encoded with `od -v`, so the errand needs no `xxd` or vim-common and no key appears on a command line.
+
+- `jobs/smoke-tests` probes `/health/ready` on every peer instead of `/health`.
 
 - `jobs/smoke-tests` sends `HeadObject` with `curl --head` in place of `-X HEAD`. Over plaintext HTTP/1.1, `curl -X HEAD` waits for a body that never arrives and times out.
 
@@ -32,13 +40,23 @@ All notable changes to rustfs-boshrelease are documented here.
 
 - `manifests/ops/resolute.yml` moves the deployment to the ubuntu-resolute (26.04) stemcell and pins bpm 1.4.41, the first bpm release that compiles there.
 
-- `rustfs.tls.ca` on `rustfs-server` sets the CA that cluster peers trust. Pre-start refuses to start a multi-node TLS deployment without it.
+- `rustfs.tls.ca` on `rustfs-server` sets the CA that cluster peers trust. Template rendering fails for a multi-node TLS deployment without it.
 
-- `rustfs.tls.certificate` on `jobs/smoke-tests` makes the errand probe the cluster over `https` when the API uses TLS. Verification is skipped with `-k`, which mirrors the `rustfs-server` job.
+- A dynamic drain script on `rustfs-server` holds a node up until every other peer answers `/health/ready`. It gives up after `rustfs.drain.timeout_secs` (600 by default) and lets the stop go ahead, polling every `rustfs.drain.poll_secs`.
+
+- `rustfs.post_start.health_timeout_secs` and `rustfs.post_start.ready_timeout_secs` bound the two post-start waits.
+
+- `rustfs.tls.certificate` and `rustfs.tls.ca` on `jobs/smoke-tests` make the errand probe the cluster over `https` and verify every node against the CA. Without the CA, it falls back to `-k` and prints a warning.
+
+- Template specs under `spec/jobs` run with `bundle exec rspec`.
 
 ### Upgrade notes
 
 - A TLS cluster now needs `rustfs.tls.ca`, and every peer's API certificate must name that peer's IP address as a subject alternative name.
+
+- The node count is fixed at the first deploy. RustFS refuses to grow a single node into a cluster, logging `unsupported pool expansion ... single-node single-drive (SNSD) ... cannot be expanded in place` to `rustfs-server.stderr.log`, and it cannot change the size of a formed cluster in place either. A cluster needs at least three nodes.
+
+- Stopping or deleting a whole cluster can now take up to the drain bound, because the second node waits for the first. Pass `--skip-drain` when you mean to take the whole cluster down.
 
 - The `rustfs.peer.tls.*` properties are still accepted, but RustFS does not read the files they render.
 
