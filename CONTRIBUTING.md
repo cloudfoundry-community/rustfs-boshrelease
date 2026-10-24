@@ -1,12 +1,13 @@
 # Contributing to rustfs-boshrelease
 
-Thank you for contributing. This document covers the development workflow,
-blob management, and release process.
+Thank you for contributing. This document covers the development workflow, blob management, and the release process.
 
 ## Prerequisites
 
 - [BOSH CLI](https://bosh.io/docs/cli-v2/) v7 or later
+
 - `unzip`, `curl`, and `sha256sum` or `shasum` for `scripts/add-blob.sh`
+
 - A BOSH director for integration testing
 
 ## Development Setup
@@ -28,7 +29,7 @@ scripts/add-blob.sh 1.0.3 musl
 
 The package expects exactly one RustFS archive, so remove the old blob with `bosh remove-blob` before you add a new version.
 
-To upload blobs to the S3 blobstore (requires `config/private.yml`):
+To upload blobs to the S3 blobstore, which requires `config/private.yml`, run these commands.
 
 ```bash
 cp config/private.yml.example config/private.yml
@@ -51,7 +52,7 @@ The release has no template spec suite yet. Test template changes by building a 
 
 ## Creating a Final Release
 
-Final releases are created by CI on tag push. To create one locally:
+Final releases are created by CI on tag push. To create one locally, run these commands.
 
 ```bash
 # Populate config/private.yml with S3 credentials first
@@ -65,6 +66,10 @@ git push --tags
 ## Pull Request Guidelines
 
 - Keep changes focused on a single logical concern per PR.
+
 - Test template changes on a deployed dev release.
+
 - Update `CHANGELOG.md` with a summary of changes.
+
 - Do not commit `config/private.yml`, `blobs/`, or `.dev_builds/`.
+

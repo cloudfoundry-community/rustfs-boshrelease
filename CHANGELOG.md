@@ -88,53 +88,40 @@ All notable changes to rustfs-boshrelease are documented here.
 
 ## 0.0.1 (2026-05-20)
 
-Initial pre-release scaffold of the BOSH release. Packages upstream RustFS
-1.0.0-beta.3 (`linux-x86_64-musl`) and runs it under `bpm`.
+This was the initial pre-release scaffold of the BOSH release. It packaged upstream RustFS 1.0.0-beta.3 (`linux-x86_64-musl`) and ran it under `bpm`.
 
 ### Added
 
-- `packages/rustfs` — pre-built upstream binary blob unpacked into
-  `$BOSH_INSTALL_TARGET/bin/rustfs`
+- `packages/rustfs` holds the pre-built upstream binary blob, which the package unpacks into `$BOSH_INSTALL_TARGET/bin/rustfs`.
 
-- `jobs/rustfs-server` — main job; `bpm.yml.erb` enumerates peers from the
-  `rustfs-peer` BOSH link to build `RUSTFS_VOLUMES`; falls back to a local
-  path for single-instance deploys. `monit` delegates lifecycle to `bpm`.
+- `jobs/rustfs-server` is the main job. Its `bpm.yml.erb` enumerates the peers from the `rustfs-peer` BOSH link to build `RUSTFS_VOLUMES`, and it falls back to a local path for single-instance deploys. The `monit` file delegates lifecycle management to `bpm`.
 
-- `jobs/rustfs-server/templates/bin/{pre-start,post-start,post-deploy}.erb`
-  — pre-start creates the per-volume data directories on the persistent disk;
-  post-start polls `/health` until the API binds; post-deploy is a no-op
-  extension point.
+- `jobs/rustfs-server/templates/bin/{pre-start,post-start,post-deploy}.erb` are the lifecycle scripts. Pre-start creates the per-volume data directories on the persistent disk, post-start polls `/health` until the API binds, and post-deploy is a no-op extension point.
 
-- `jobs/rustfs-server/templates/tls/{api,peer}/*.pem.erb` — optional TLS for
-  the S3 API and cluster peer mTLS; rendered from job properties.
+- `jobs/rustfs-server/templates/tls/{api,peer}/*.pem.erb` render optional TLS files for the S3 API and for cluster peer mTLS from job properties.
 
-- `jobs/smoke-tests` — BOSH errand. Probes `/health` on every peer from the
-  `rustfs-peer` link, then runs `CreateBucket → PutObject → GetObject (verify) →
-  DeleteObject → HeadObject (404)` against the first peer using `curl` +
-  `openssl` (AWS SigV2). No external packages.
+- `jobs/smoke-tests` is a BOSH errand. It probes `/health` on every peer from the `rustfs-peer` link, and then runs `CreateBucket`, `PutObject`, `GetObject` (verified), `DeleteObject`, and `HeadObject` (expecting a 404) against the first peer. It uses `curl` and `openssl` with AWS SigV2 and needs no external packages.
 
-- `.github/workflows/release.yml` — tag-triggered final-release workflow with
-  upstream-`SHA256SUMS` verification and GitHub Release publication.
+- `.github/workflows/release.yml` is a tag-triggered final-release workflow that verifies upstream's `SHA256SUMS` and publishes a GitHub Release.
 
-- `scripts/add-blob.sh` — fetches a versioned RustFS asset (`musl` or `gnu`),
-  verifies upstream sha256, registers under the BOSH blob key expected by
-  `packages/rustfs/spec`.
+- `scripts/add-blob.sh` fetches a versioned RustFS asset (`musl` or `gnu`), verifies the upstream sha256, and registers the asset under the BOSH blob key that `packages/rustfs/spec` expects.
 
-- `docs/RELEASE.md` — operator-facing release process.
+- `docs/RELEASE.md` describes the release process for operators.
 
 ### Properties (highlights)
 
-- `rustfs.access_key`, `rustfs.secret_key` — required, no defaults
-- `rustfs.port` (default 9000), `rustfs.console_port` (default 9001)
-- `rustfs.volumes_per_node` (default 4) — erasure-coding sub-dirs per node
-- `rustfs.persistent_disk_path` (default `/var/vcap/store/rustfs`)
-- `rustfs.region`, `rustfs.log_level`, `rustfs.console_enable`,
-  `rustfs.health_enable`, `rustfs.server_domains`, `rustfs.kms.*`
-- TLS pairs for `rustfs.tls.*` and `rustfs.peer.tls.*`
+- `rustfs.access_key` and `rustfs.secret_key` are required and have no defaults.
+
+- `rustfs.port` (default 9000) and `rustfs.console_port` (default 9001) set the listening ports.
+
+- `rustfs.volumes_per_node` (default 4) sets the number of erasure-coding sub-directories per node.
+
+- `rustfs.persistent_disk_path` (default `/var/vcap/store/rustfs`) sets the base path for data.
+
+- `rustfs.region`, `rustfs.log_level`, `rustfs.console_enable`, `rustfs.health_enable`, `rustfs.server_domains`, and `rustfs.kms.*` cover the remaining settings.
+
+- `rustfs.tls.*` and `rustfs.peer.tls.*` hold the TLS pairs.
 
 ### Status
 
-RustFS upstream is pre-release (1.0.0-beta.3) and the distributed/cluster mode
-is labelled "Under Testing" by the project. This release is suitable for
-evaluation; validate behaviour against your workload before relying on it for
-important data.
+RustFS upstream was pre-release (1.0.0-beta.3), and the project labelled its distributed cluster mode "Under Testing". This release is suitable for evaluation. We should validate its behavior against our own workload before relying on it for important data.

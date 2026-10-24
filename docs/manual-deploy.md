@@ -5,9 +5,13 @@ This guide walks through deploying the rustfs release directly with the BOSH CLI
 ## Prerequisites
 
 - BOSH CLI installed and targeted at a director (`bosh env` shows a healthy director)
+
 - The rustfs release uploaded to that director
+
 - The `bpm` release uploaded
+
 - An Ubuntu Noble or Ubuntu Resolute stemcell uploaded (`bosh stemcells` shows it)
+
 - Credentials for the object store S3 API (access key and secret key)
 
 ## Step 1: Upload the cloud-config
@@ -20,7 +24,7 @@ Edit `manifests/cloud-config.yml` to match your IaaS before applying. The inline
 bosh update-cloud-config manifests/cloud-config.yml
 ```
 
-Verify it was accepted:
+Verify that the director accepted it.
 
 ```bash
 bosh cloud-config
@@ -41,14 +45,14 @@ bosh upload-release "https://bosh.io/d/github.com/cloudfoundry/bpm-release?v=1.4
 
 The manifest pins bpm 1.4.22 for Noble. On Resolute, upload bpm 1.4.41 instead, because older bpm releases do not compile there.
 
-Upload the stemcell if not already present:
+Upload the stemcell if it is not already present.
 
 ```bash
 bosh upload-stemcell https://bosh.io/d/stemcells/bosh-warden-boshlite-ubuntu-noble-go_agent
 # Replace with the stemcell appropriate for your IaaS and OS.
 ```
 
-Confirm both releases and the stemcell appear:
+Confirm that both releases and the stemcell appear.
 
 ```bash
 bosh releases
@@ -69,7 +73,7 @@ bosh -d rustfs deploy manifests/rustfs.yml \
 
 ### bosh-lite / single-node evaluation
 
-The `manifests/ops/standalone.yml` ops file reduces the deployment to one instance on the `default` network, which matches bosh-lite's built-in network:
+The `manifests/ops/standalone.yml` ops file reduces the deployment to one instance on the `default` network, which matches bosh-lite's built-in network.
 
 ```bash
 bosh -d rustfs deploy manifests/rustfs.yml \
@@ -89,7 +93,7 @@ bosh -d rustfs deploy manifests/rustfs.yml \
   --var rustfs_secret_key=<your-secret-key>
 ```
 
-Watch BOSH finish all tasks before proceeding:
+Watch BOSH finish all of its tasks before you go on.
 
 ```bash
 bosh -d rustfs instances --vitals
@@ -97,21 +101,21 @@ bosh -d rustfs instances --vitals
 
 ## Step 4: Verify XFS on the persistent disk
 
-The manifest sets `env.persistent_disk_fs: xfs`, so BOSH formats the persistent disk with XFS before mounting it at `/var/vcap/store`. Confirm the filesystem type after the deployment completes:
+The manifest sets `env.persistent_disk_fs: xfs`, so BOSH formats the persistent disk with XFS before mounting it at `/var/vcap/store`. Confirm the filesystem type after the deployment completes.
 
 ```bash
 # df -T shows filesystem type; xfs expected for /var/vcap/store
 bosh -d rustfs ssh rustfs/0 -c 'df -T /var/vcap/store'
 ```
 
-Expected output contains a line like:
+The expected output contains a line like this one.
 
 ```
 Filesystem     Type  1K-blocks    Used Available Use% Mounted on
 /dev/sdb       xfs   52428800       0  52428800   0% /var/vcap/store
 ```
 
-Additional verification commands:
+These commands give additional verification.
 
 ```bash
 # Show block device and mount layout
@@ -123,7 +127,7 @@ bosh -d rustfs ssh rustfs/0 -c 'mount | grep store'
 
 ## Step 5: S3 API smoke test
 
-The rustfs-server job listens on port 9000 for the S3-compatible API. If TLS is not configured, use `http`; with TLS configured, use `https` and pass your certificate flags to curl.
+The rustfs-server job listens on port 9000 for the S3-compatible API. If TLS is not configured, use `http`. With TLS configured, use `https` and pass your certificate flags to curl.
 
 ```bash
 # Replace <instance-ip> with the IP shown by `bosh -d rustfs instances`
@@ -133,13 +137,13 @@ curl -v http://<instance-ip>:9000/
 curl -v --cacert /path/to/ca.crt https://<instance-ip>:9000/
 ```
 
-A `403 Forbidden` or `200 OK` response from the S3 API confirms the server is running, and `curl http://<instance-ip>:9000/health/live` returns `200` once the process is up. An empty response or `Connection refused` indicates the job has not started — check logs with:
+A `403 Forbidden` or `200 OK` response from the S3 API confirms the server is running, and `curl http://<instance-ip>:9000/health/live` returns `200` once the process is up. An empty response or `Connection refused` means the job has not started, so we check the logs with this command.
 
 ```bash
 bosh -d rustfs logs rustfs/0
 ```
 
-You can also run the built-in smoke-tests errand to validate basic object operations:
+We can also run the built-in smoke-tests errand to validate basic object operations.
 
 ```bash
 bosh -d rustfs run-errand smoke-tests \
