@@ -48,7 +48,7 @@ bosh -e <your-director> upload-release
 
 ## Testing Template Changes
 
-The release has no template spec suite yet. Test template changes by building a dev release and deploying it, ideally on both a Noble and a Resolute stemcell, and then run the `smoke-tests` errand.
+The template specs live under `spec/jobs`, and they run with `bundle exec rspec`. Run them after every template change. Then build a dev release and deploy it, ideally on both a Noble and a Resolute stemcell, and run the `smoke-tests` errand.
 
 ## Creating a Final Release
 
